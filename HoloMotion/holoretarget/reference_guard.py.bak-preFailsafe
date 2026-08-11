@@ -1,0 +1,156 @@
+"""Reference sanity guard — LOCAL ADDITION (2026-08-07).
+
+Sits between the PICO stream and the retargeted reference. When the operator
+does something the robot must not follow (floating both legs, teleporting,
+sensor glitches), the guard HOLDS the last good reference instead of passing
+the impossible one to the balance policy. A held reference is the safest
+possible command: the robot simply keeps doing what it was already doing.
+
+Edge cases covered (input side, body_poses[24,7], PICO/SMPL-24 order):
+  floating_legs   both ankles risen far above their calibrated height floor
+                  (operator jumped, sat down, lifted both feet, or leg
+                  trackers glitched) — a biped reference with no support
+  root_teleport   pelvis moved more than MAX_ROOT_STEP_M in one frame
+                  (tracking loss/re-acquire snap, occlusion glitch)
+  nan_input       any non-finite value in the stream
+Edge cases covered (output side, qpos[36]):
+  root_too_low / root_too_high   reference pelvis outside plausible band
+                  (squatted through the floor, or flying)
+  root_tilt      reference root tilted > MAX_ROOT_TILT_DEG from vertical
+                  (waist tracker slipped, or operator bent double — either
+                  way the balance policy should not chase it)
+  nan_output     solver produced non-finite values
+Escalation:
+  HOLD            single-frame violations: freeze reference, log, continue
+  STALE           held longer than MAX_HOLD_S: caller should treat the
+                  stream as dead (same as Wi-Fi loss — spotter/damp time).
+                  Exposed via .stale flag; the teleop node logs it loudly.
+
+Tunables via environment (defaults chosen for gantry sessions):
+  GUARD_FLOAT_RISE_M      both-ankle rise vs calibration floor  [0.25]
+  GUARD_MAX_ROOT_STEP_M   per-frame root translation limit      [0.40]
+  GUARD_ROOT_Z_MIN_M / GUARD_ROOT_Z_MAX_M                       [0.35 / 1.10]
+  GUARD_MAX_ROOT_TILT_DEG                                       [50]
+  GUARD_MAX_HOLD_S                                              [2.0]
+"""
+from __future__ import annotations
+
+import os
+import time
+
+import numpy as np
+
+# SMPL-24 indices in the PICO stream
+_PELVIS, _L_ANKLE, _R_ANKLE = 0, 7, 8
+
+
+def _env_f(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+class ReferenceGuard:
+    def __init__(self) -> None:
+        self.float_rise_m = _env_f("GUARD_FLOAT_RISE_M", 0.25)
+        self.max_root_step_m = _env_f("GUARD_MAX_ROOT_STEP_M", 0.40)
+        self.root_z_min = _env_f("GUARD_ROOT_Z_MIN_M", 0.35)
+        self.root_z_max = _env_f("GUARD_ROOT_Z_MAX_M", 1.10)
+        self.max_root_tilt_deg = _env_f("GUARD_MAX_ROOT_TILT_DEG", 50.0)
+        self.max_hold_s = _env_f("GUARD_MAX_HOLD_S", 2.0)
+
+        self._ankle_floor: float | None = None   # min ankle height seen (calibration)
+        self._last_root: np.ndarray | None = None
+        self._last_good_qpos: np.ndarray | None = None
+        self._hold_since: float | None = None
+        self.stale = False
+        self.trip_counts: dict[str, int] = {}
+        self._last_log = 0.0
+
+    # ------------------------------------------------------------------ util
+    def _trip(self, reason: str) -> None:
+        self.trip_counts[reason] = self.trip_counts.get(reason, 0) + 1
+        now = time.time()
+        if now - self._last_log > 1.0:   # rate-limited console line
+            self._last_log = now
+            held = f", holding {now - self._hold_since:.1f}s" if self._hold_since else ""
+            print(f"[GUARD] {reason} (x{self.trip_counts[reason]}{held})", flush=True)
+
+    def reset(self) -> None:
+        self._ankle_floor = None
+        self._last_root = None
+        self._last_good_qpos = None
+        self._hold_since = None
+        self.stale = False
+
+    # ----------------------------------------------------------------- input
+    def check_input(self, body_poses: np.ndarray) -> str | None:
+        """Return a violation reason, or None if the frame is safe."""
+        bp = np.asarray(body_poses)
+        if not np.all(np.isfinite(bp)):
+            return "nan_input"
+
+        # PICO frame: Unity Y-up -> height is column 1
+        pelvis = bp[_PELVIS, :3]
+        l_y, r_y = float(bp[_L_ANKLE, 1]), float(bp[_R_ANKLE, 1])
+        low_ankle = min(l_y, r_y)
+
+        # learn the ankle floor during normal standing
+        if self._ankle_floor is None:
+            self._ankle_floor = low_ankle
+        else:
+            self._ankle_floor = min(self._ankle_floor, low_ankle)
+            if low_ankle - self._ankle_floor > self.float_rise_m:
+                return "floating_legs"
+
+        if self._last_root is not None:
+            step = float(np.linalg.norm(pelvis - self._last_root))
+            if step > self.max_root_step_m:
+                self._last_root = pelvis.copy()   # re-anchor so recovery is possible
+                return "root_teleport"
+        self._last_root = pelvis.copy()
+        return None
+
+    # ---------------------------------------------------------------- output
+    def check_output(self, qpos: np.ndarray) -> str | None:
+        q = np.asarray(qpos).ravel()
+        if not np.all(np.isfinite(q)):
+            return "nan_output"
+        z = float(q[2])
+        if z < self.root_z_min:
+            return "root_too_low"
+        if z > self.root_z_max:
+            return "root_too_high"
+        # root tilt from vertical: rotate unit-z by root quaternion (wxyz)
+        w, x, y, zq = q[3:7]
+        up_z = 1.0 - 2.0 * (x * x + y * y)     # z-component of R(q) @ [0,0,1]
+        tilt_deg = float(np.degrees(np.arccos(np.clip(up_z, -1.0, 1.0))))
+        if tilt_deg > self.max_root_tilt_deg:
+            return "root_tilt"
+        return None
+
+    # ------------------------------------------------------------------ gate
+    def gate(self, body_poses: np.ndarray, qpos: np.ndarray) -> np.ndarray:
+        """Main entry: returns qpos to publish (fresh, or held last-good)."""
+        reason = self.check_input(body_poses) or self.check_output(qpos)
+        now = time.time()
+        if reason is None:
+            self._last_good_qpos = np.asarray(qpos, dtype=np.float32).copy()
+            self._hold_since = None
+            self.stale = False
+            return qpos
+
+        self._trip(reason)
+        if self._hold_since is None:
+            self._hold_since = now
+        elif now - self._hold_since > self.max_hold_s:
+            if not self.stale:
+                print(f"[GUARD] reference held > {self.max_hold_s:.0f}s — "
+                      f"STALE: treat stream as dead (damp via remote/e-stop "
+                      f"if the robot is live)", flush=True)
+            self.stale = True
+
+        if self._last_good_qpos is not None:
+            return self._last_good_qpos
+        return qpos   # nothing good yet (startup) — pass through

@@ -1,0 +1,88 @@
+runtime:
+  conda_setup: "/root/miniconda3/etc/profile.d/conda.sh"
+  python_executable: "${Deploy_CONDA_PREFIX}/bin/python"
+  ros_setup: "/opt/ros/humble/setup.sh"
+  unitree_setup: "/root/unitree_ros2/setup.sh"
+  deploy_env: "../../deploy.env"
+  cuda_home: "/usr/local/cuda-12.2"
+  # false (upstream repo says true): the image ships prebuilt; a launch-time
+  # colcon rebuild wipes install/ INCLUDING the model dirs, which only exist
+  # in install/ — this "ate the models" repeatedly on 2026-08-10.
+  build_before_launch: false
+  cyclonedds_home: "/root/cyclonedds/install"
+  pico_service_command: "/opt/apps/roboticsservice/runService.sh"
+  pico_service_log: "/tmp/holomotion_pico_service.log"
+  pico_service_startup_sec: 1.0
+  extra_ld_library_paths:
+    - "/usr/local/cuda-12.2/compat"
+    - "/usr/local/cuda-12.2/lib64"
+    - "/host_gpu"
+    - "/cuda_base"
+    - "/usr/lib/aarch64-linux-gnu/tegra"
+    - "/usr/lib/aarch64-linux-gnu"
+    - "/usr/local/cuda/lib64"
+    - "/lib/aarch64-linux-gnu"
+
+robot:
+  config_file: "config/g1_29dof_holomotion.yaml"
+  network_interface: "eth0"
+
+recording:
+  enabled: false
+  storage: "mcap"
+  bag_dir: "./bag_record"
+  topics:
+    - "/lowcmd"
+    - "/lowstate"
+    - "/humanoid/action"
+
+policy:
+  # pico_local keeps Pico input, Retarget, Observation and Tracking on Orin.
+  # LOCAL FIX (2026-08-11 audit S7): pico_local + cpu backend is REJECTED at
+  # node setup (policy_node_29dof.py raises "pico_local requires Warp CUDA
+  # Observation") — the 08-11 image shipped exactly that pair and would fail
+  # at first start. zmq + cpu is the rehearsal-validated topology: laptop
+  # runs the CPU retarget node (headset reaches its PC service via the robot
+  # AP NAT at 192.168.123.2) and publishes references over the wired link.
+  # If the ethernet is unplugged the policy just falls back to velocity mode.
+  reference_source: "zmq"
+  reference_zmq_uri: "tcp://192.168.123.2:6001"
+  reference_zmq_topic: "reference_qpos"
+  reference_zmq_mode: "connect"
+  reference_zmq_conflate: true
+  zmq_jitter_delay_frames: 0
+  # 1.5s (was 0.6): 2.4 GHz hiccups of 0.6-1s were silently bouncing
+  # tracking back to velocity mode seconds after every B press
+  # (2026-08-10). Guard hold + suppression still cover real stream death.
+  max_data_age: 1.5
+  enable_teleop_reference: true
+  local_retarget_asset_root: ""
+  # Optional visualization only. It is rate-limited, non-blocking and may drop
+  # any frame or disable itself without affecting the control path.
+  reference_telemetry_enabled: true
+  reference_telemetry_uri: "tcp://*:6002"
+  reference_telemetry_topic: "reference_qpos"
+  reference_telemetry_mode: "bind"
+  reference_telemetry_hz: 50.0
+  reference_telemetry_min_slack_ms: 2.0
+  reference_telemetry_deadline_pause_sec: 5.0
+  cpu_affinity_reference_telemetry: ""
+  # inference_backend: onnx keeps the current ONNX Runtime CUDA path.
+  # Change to tensorrt to use the strict TensorRTExecutionProvider path.
+  inference_backend: "tensorrt"
+  # auto benchmarks/uses the available GPU path; cpu remains a safe fallback.
+  # torch and warp select explicit GPU staging implementations for Orin tests.
+  # cpu (was auto): auto picked warp GPU staging on Orin — 2.65s JIT compile
+  # froze the loop at the first motion frame (7.7Hz, robot fell 2026-08-10)
+  # and steady-state stayed ~20Hz. CPU staging is the rehearsal-validated
+  # path (50Hz / 5ms). Do not re-enable auto without an offline warmup pass
+  # AND a measured 50Hz steady state on hardware.
+  motion_observation_backend: "cpu"
+  # The deployed legacy motion ONNX predates rope_max_seq_len metadata.
+  motion_rope_max_seq_len: 8192
+  motion_rope_reset_margin: 64
+  timing_debug_enabled: false
+  timing_debug_log_interval_sec: 5.0
+  timing_debug_log_per_loop: false
+  cpu_affinity_main: ""
+  cpu_affinity_zmq_sub: ""

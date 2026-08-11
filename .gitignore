@@ -1,0 +1,18 @@
+# --- too large for GitHub / re-downloadable ---
+artifacts/
+tools/platform-tools/
+HoloMotion/checkpoints/
+HoloMotion/outputs/
+HoloMotion/third_party/XRoboToolkit-PC-Service-Pybind/tmp/
+
+# upstream HoloMotion git dir (renamed aside during outer-repo commits;
+# restore with: mv HoloMotion/.git-upstream HoloMotion/.git)
+HoloMotion/.git-upstream/
+
+# --- caches / build junk ---
+__pycache__/
+*.pyc
+.pytest_cache/
+HoloMotion/holomotion.egg-info/
+nohup.out
+HoloMotion/third_party/XRoboToolkit-PC-Service-Pybind/.git-upstream/

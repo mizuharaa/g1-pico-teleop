@@ -1,0 +1,31 @@
+# @package _global_
+#
+# Shoulder/hip-fidelity finetune (2026-08-07). Identical to
+# motion_tracking_v1_4_0_finetune except the reward set is the
+# shoulderhip variant (adds shoulder_roll/hip_roll reward points at
+# half weight; tightens keybody rotation tracking).
+#
+# Launch on the cloud box (after downloading the checkpoint package and
+# building the motion HDF5 dataset):
+#   CONFIG_NAME=motion_tracking_v1_4_0_finetune_shoulderhip \
+#     bash holomotion/scripts/training/finetune_motion_tracking_v1_4_0.sh
+# or pass --config-name directly to train.py.
+
+defaults:
+  - /training/motion_tracking/motion_tracking_v1_4_0
+  - override /env/rewards: motion_tracking/rew_motion_tracking_shoulderhip
+  - _self_
+
+checkpoint: ${oc.env:HOLOMOTION_FINETUNE_CHECKPOINT,checkpoints/holomotion_v1.4/model_14000.pt}
+
+algo:
+  config:
+    num_learning_iterations: 10000
+
+mujoco_eval:
+  ckpt_onnx_names:
+    - model_16000.onnx
+    - model_18000.onnx
+    - model_20000.onnx
+    - model_22000.onnx
+    - model_24000.onnx
