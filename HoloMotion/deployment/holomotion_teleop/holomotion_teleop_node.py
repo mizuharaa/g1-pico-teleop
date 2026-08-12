@@ -178,7 +178,15 @@ class PicoReader:
                 # Surface it with the same head-pose probe so the operator
                 # and the supervisor's recycler can react.
                 now_frozen = time.time()
-                if now_frozen - getattr(self, "_frozen_report_t", 0.0) >= 5.0:
+                # 2026-08-12: a single unchanged-stamp poll is NORMAL (the
+                # poll loop runs ~1 MHz vs a 90 Hz stream) — the 08-11 patch
+                # printed a fake FROZEN every 5 s on healthy streams. Only a
+                # stamp that stays frozen >0.25 s continuously is a latch.
+                if getattr(self, "_frozen_since", None) is None:
+                    self._frozen_since = now_frozen
+                if (
+                    now_frozen - self._frozen_since >= 0.25
+                ) and now_frozen - getattr(self, "_frozen_report_t", 0.0) >= 5.0:
                     self._frozen_report_t = now_frozen
                     try:
                         head = np.asarray(
@@ -209,6 +217,7 @@ class PicoReader:
                 time.sleep(0.000001)
                 continue
 
+            self._frozen_since = None
             device_dt = ((stamp_ns - prev_stamp_ns) * 1e-9) if prev_stamp_ns is not None else 0.0
             if device_dt > 0.0:
                 inst_fps = 1.0 / device_dt
@@ -612,6 +621,7 @@ class HoloRetargetTeleopNode:
                     self._ref_smooth_prev = None
                 if reference_qpos is not None:
                     reference_qpos = self._smooth_reference(reference_qpos)
+                    reference_qpos = self._step_guard(reference_qpos)
                     self._retarget_completed_in_window += 1
                     self._publish(
                         reference_qpos,
@@ -630,6 +640,42 @@ class HoloRetargetTeleopNode:
         self._accumulate_timing("tick_total", tick_start)
         self._maybe_log_retarget_rate()
         self._maybe_log_timing()
+
+    def _step_guard(self, qpos: np.ndarray) -> np.ndarray:
+        """LOCAL PATCH (2026-08-12): output-side reference step guard — THE
+        fix for the measured teleports (1.34 m root / 0.71 rad joint steps
+        in fresh frames that drove the tracking violence; audit-verified).
+        Rate-limits the PUBLISHED reference: root xy <=0.15 m, height
+        <=0.10 m, joints <=0.30 rad per 50 Hz frame (~7.5 m/s, 15 rad/s —
+        far above human motion, so normal teleop is never touched). After a
+        teleport the output *walks* to the new pose at the cap instead of
+        jumping, and the same mechanism smoothly bridges publisher restarts.
+        Disable with HOLOTELEOP_STEP_GUARD=0."""
+        if os.environ.get("HOLOTELEOP_STEP_GUARD", "1") == "0":
+            return qpos
+        qpos = np.asarray(qpos, dtype=np.float32)
+        prev = getattr(self, "_step_guard_prev", None)
+        if prev is None or prev.shape != qpos.shape:
+            self._step_guard_prev = qpos.copy()
+            return qpos
+        out = qpos.copy()
+        d = out[0:2] - prev[0:2]
+        n = float(np.linalg.norm(d))
+        if n > 0.15:
+            out[0:2] = prev[0:2] + d * (0.15 / n)
+        out[2] = prev[2] + float(np.clip(out[2] - prev[2], -0.10, 0.10))
+        q_prev, q_new = prev[3:7], out[3:7]
+        if float(np.dot(q_prev, q_new)) < 0.0:
+            q_new = -q_new
+        ang = 2.0 * float(np.arccos(np.clip(abs(np.dot(q_prev, q_new)), -1, 1)))
+        if ang > 0.25:
+            t = 0.25 / ang
+            mix = (1 - t) * q_prev + t * q_new
+            nm = float(np.linalg.norm(mix))
+            out[3:7] = mix / nm if nm > 1e-8 else q_prev
+        out[7:] = prev[7:] + np.clip(out[7:] - prev[7:], -0.30, 0.30)
+        self._step_guard_prev = out.copy()
+        return out
 
     def _smooth_reference(self, qpos: np.ndarray) -> np.ndarray:
         """LOCAL PATCH (2026-08-11): EMA on the published reference to kill

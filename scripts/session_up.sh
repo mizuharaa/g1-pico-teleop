@@ -149,6 +149,14 @@ else
   fi
 fi
 
+# ------------------------------------------- factory controller MUST be off
+step "4.5/6 factory motion controller (the 08-11 all-day fight)"
+MODE=$(timeout 25 ~/full-body-teleoperation/scripts/release_factory_control.sh 2>/dev/null | grep -o "after: .*" | head -1)
+echo "$MODE" | grep -q "'name': ''" \
+  && ok "factory controller RELEASED ($MODE)" \
+  || die "factory controller still active or unreachable: $MODE" \
+         "robot must be tethered/damped, then rerun; L2+R2 chord is NOT reliable"
+
 # ---------------------------------------------------------------- teleop container
 step "5/6 teleop container"
 if [ "$NO_APP" = 1 ]; then
@@ -176,9 +184,12 @@ pgrep -f 'joint_watchdog\.py' >/dev/null \
 cat <<EOM
 
 READY. Remaining MANUAL steps (cannot be automated):
-  1. Headset: join Wi-Fi 'g1-teleop' (pw teleop12345), app -> Enter 10.42.0.1
+  1. Headset: join Wi-Fi 'g1-teleop' (pw teleop12345), app -> Enter 192.168.123.2
+     (zmq topology 2026-08-11: laptop retarget feeds the robot — SAME setup as sim)
      -> Send tick -> Mode: Full-body  (Mode resets to None on EVERY reconnect!)
-  2. T1 e-stop console (keep it focused):  $D/scripts/estop_console.sh
+  2. T1 e-stop console (keep it focused):  $D/scripts/estop_console2.sh
+     (NOT estop_console.sh — LocoClient.Damp is a FALSE POSITIVE once the
+      factory service is released; console2 = docker kill -> firmware damp)
   3. Remote in the spotter's hand. Button map under custom control:
        Y  = tracking -> velocity stand (FIRST response, robot balances)
        Select = damped e-stop, 2 s damp then motors OFF (collapse; support first)

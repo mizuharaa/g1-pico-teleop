@@ -1066,6 +1066,40 @@ class HoloMotionPolicyNode(Node):
             return
         self._last_consumed_reference_sequence = sequence
 
+        # LOCAL PATCH (2026-08-12): transition-window guards — the two holes
+        # every violent run fell through (audit S3 + morning-run timeline).
+        # (1) frame_index REGRESSION = publisher restarted: old and new pose
+        # streams must not be spliced. Disarm readiness until the queue
+        # refills with post-restart frames only.
+        if frame_index is not None:
+            last_fi = getattr(self, "_guard_last_frame_index", None)
+            if last_fi is not None and int(frame_index) < last_fi - 10:
+                self.get_logger().warn(
+                    f"reference frame_index regressed {last_fi} -> {int(frame_index)} "
+                    "(publisher restart) — resetting VR queue readiness")
+                try:
+                    self._vr_reference.seen_frames = 0
+                except Exception:
+                    pass
+            self._guard_last_frame_index = int(frame_index)
+        # (2) FROZEN-FRESH: bit-identical payloads with advancing sequence =
+        # wedged upstream re-sending one pose. Stop storing after 25
+        # identical frames (0.5 s) so data-age grows and the normal stale
+        # fallback fires instead of tracking a frozen ghost.
+        arr = np.asarray(data, dtype=np.float32)
+        prev_arr = getattr(self, "_guard_prev_payload", None)
+        if prev_arr is not None and arr.shape == prev_arr.shape and np.array_equal(arr, prev_arr):
+            self._guard_frozen_count = getattr(self, "_guard_frozen_count", 0) + 1
+            if self._guard_frozen_count == 25:
+                self.get_logger().warn(
+                    "reference FROZEN-FRESH (25 identical frames with fresh "
+                    "timestamps) — withholding frames so stale fallback engages")
+            if self._guard_frozen_count >= 25:
+                return
+        else:
+            self._guard_frozen_count = 0
+        self._guard_prev_payload = arr.copy()
+
         if frame_index is not None:
             self._npz_replay_frame_index = int(frame_index)
         self._latest_sender_timestamp = sender_timestamp

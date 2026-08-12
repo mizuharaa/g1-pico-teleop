@@ -16,6 +16,7 @@ fi
 docker ps -a --format '{{.Names}}' | grep '^holomotion_g1_' | sort -r | tail -n +4 \
   | xargs -r docker rm >/dev/null 2>&1
 docker run -d --runtime nvidia --gpus all --privileged --network host \
+  -e HOLOMOTION_TARGET_SLEW_RAD_S=15 \
   --name holomotion_g1 --entrypoint bash \
   horizonrobotics/holomotion:v1.4.0-orin-jp5.1-arm64 -c 'holomotion teleop' >/dev/null \
   && echo CONTAINER-STARTED

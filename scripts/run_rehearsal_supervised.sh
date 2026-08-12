@@ -72,9 +72,15 @@ while true; do
     : > "$LOG"
     # 200>&- : do NOT inherit the flock fd — an orphaned node holding it
     # would block every future supervisor forever ("another instance" loop).
+    # reference tape (2026-08-12 decisive-run protocol): one file per node
+    # incarnation; saved by the node's SIGTERM handler on every bounce.
+    mkdir -p ~/ref_tapes
+    TAPE=~/ref_tapes/ref_$(date +%Y%m%d_%H%M%S).npz
+    echo "[supervisor] reference tape -> $TAPE"
     PYTHONUNBUFFERED=1 python holomotion_teleop_node.py \
         --robot-zmq-uri "tcp://*:6001" --robot-zmq-mode bind \
         --hz 50 --timing-log-every 250 --skip-start-service \
+        --debug-retarget-dump "$TAPE" \
         >> "$LOG" 2>&1 200>&- &
     NODE=$!
     echo "[supervisor] node started (pid $NODE)"
@@ -98,7 +104,11 @@ while true; do
         CONNS_PREV="$CONNS"
         if [ -n "$NEW_PEER" ]; then
             echo "[supervisor] NEW app connection ($NEW_PEER) -> refreshing node for a clean SDK session"
-            kill -9 "$NODE" 2>/dev/null
+            # graceful (2026-08-12): SIGTERM lets the node save its reference
+            # tape AND close the SDK client slot (kill -9 leaked it — see
+            # graceful_kill comment; the transition tape is the evidence we
+            # need when a violent run coincides with a reconnect bounce).
+            graceful_kill "$NODE"
             wait "$NODE" 2>/dev/null
             break
         fi

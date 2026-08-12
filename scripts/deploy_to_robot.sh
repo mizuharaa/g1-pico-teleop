@@ -33,6 +33,7 @@ rsync -a --delete "$D/HoloMotion/holoretarget/" "$R":holoretarget_patched/
 ssh "$R" "mkdir -p ~/humanoid_policy_patched"
 scp "$D/HoloMotion/deployment/unitree_g1_ros2_29dof/src/humanoid_policy/local_retarget.py" \
     "$D/HoloMotion/deployment/unitree_g1_ros2_29dof/src/humanoid_policy/policy_runtime.py" \
+    "$D/HoloMotion/deployment/unitree_g1_ros2_29dof/src/humanoid_policy/policy_node_29dof.py" \
     "$R":~/humanoid_policy_patched/
 scp "$D/HoloMotion/deployment/unitree_g1_ros2_29dof/launch_profiles/orin_docker.yaml" \
     "$R":~/humanoid_policy_patched/orin_docker.yaml

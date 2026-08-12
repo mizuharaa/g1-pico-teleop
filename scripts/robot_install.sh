@@ -71,10 +71,16 @@ if [ -d ~/holoretarget_patched ]; then
   if [ -f ~/humanoid_policy_patched/local_retarget.py ]; then
     for f in ~/humanoid_policy_patched/*.py; do
       NAME=$(basename "$f")
+      # 2026-08-12 TRAP: ros2 launch executes the EXTENSIONLESS entry copy
+      # in install/.../lib/humanoid_control/ directly as __main__ — a 5th
+      # copy the '*.py' find missed. We shipped guards for weeks that never
+      # ran. Patch module copies AND any extensionless entry-script copy.
+      STEM="${NAME%.py}"
+      FINDCMD="find /opt -name $NAME -path '*humanoid_policy*' 2>/dev/null; find /opt -name $STEM -type f -path '*lib/humanoid_control*' 2>/dev/null"
       TARGETS=$( (docker run --rm --entrypoint bash "$IMAGE" \
-          -c "find /opt -name $NAME -path '*humanoid_policy*' 2>/dev/null" 2>/dev/null) || \
+          -c "$FINDCMD" 2>/dev/null) || \
         sudo docker run --rm --entrypoint bash "$IMAGE" \
-          -c "find /opt -name $NAME -path '*humanoid_policy*' 2>/dev/null" )
+          -c "$FINDCMD" )
       if [ -z "$TARGETS" ]; then
         echo "ERROR: $NAME not found inside the image — cannot overlay the"
         echo "       failsafe patches. NOT safe to run teleop. Aborting."
