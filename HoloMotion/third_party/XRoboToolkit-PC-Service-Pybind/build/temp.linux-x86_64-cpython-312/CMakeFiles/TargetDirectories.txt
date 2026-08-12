@@ -1,0 +1,7 @@
+/home/alois/full-body-teleoperation/HoloMotion/third_party/XRoboToolkit-PC-Service-Pybind/build/temp.linux-x86_64-cpython-312/CMakeFiles/xrobotoolkit_sdk.dir
+/home/alois/full-body-teleoperation/HoloMotion/third_party/XRoboToolkit-PC-Service-Pybind/build/temp.linux-x86_64-cpython-312/CMakeFiles/edit_cache.dir
+/home/alois/full-body-teleoperation/HoloMotion/third_party/XRoboToolkit-PC-Service-Pybind/build/temp.linux-x86_64-cpython-312/CMakeFiles/rebuild_cache.dir
+/home/alois/full-body-teleoperation/HoloMotion/third_party/XRoboToolkit-PC-Service-Pybind/build/temp.linux-x86_64-cpython-312/CMakeFiles/list_install_components.dir
+/home/alois/full-body-teleoperation/HoloMotion/third_party/XRoboToolkit-PC-Service-Pybind/build/temp.linux-x86_64-cpython-312/CMakeFiles/install.dir
+/home/alois/full-body-teleoperation/HoloMotion/third_party/XRoboToolkit-PC-Service-Pybind/build/temp.linux-x86_64-cpython-312/CMakeFiles/install/local.dir
+/home/alois/full-body-teleoperation/HoloMotion/third_party/XRoboToolkit-PC-Service-Pybind/build/temp.linux-x86_64-cpython-312/CMakeFiles/install/strip.dir

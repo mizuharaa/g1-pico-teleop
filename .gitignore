@@ -1,8 +1,8 @@
 # --- too large for GitHub / re-downloadable ---
-artifacts/
-tools/platform-tools/
-HoloMotion/checkpoints/
-HoloMotion/outputs/
+# artifacts/ (tracked since 2026-08-12: user wants everything in)
+# tools/platform-tools/ (tracked)
+# HoloMotion/checkpoints/ (tracked)
+# HoloMotion/outputs/ (tracked)
 HoloMotion/third_party/XRoboToolkit-PC-Service-Pybind/tmp/
 
 # upstream HoloMotion git dir (renamed aside during outer-repo commits;
