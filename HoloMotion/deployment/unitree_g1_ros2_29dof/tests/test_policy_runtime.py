@@ -186,6 +186,33 @@ class PolicyRuntimeTest(unittest.TestCase):
         self.assertEqual(port.publish_control_count, 1)
         self.assertEqual((runtime.state.vx, runtime.state.vy, runtime.state.vyaw), port.remote_controller.velocity)
 
+    def test_a_button_is_noop_once_policy_already_enabled(self):
+        """Regression (2026-08-14): A had no re-entry guard.
+
+        Stock called enable_velocity_policy() on every A press, snapping
+        target_dof_pos_onnx to the velocity defaults with no blend even while
+        motion tracking was live -- 7 such mid-run snaps in 4.4 s were logged in
+        container 0811_165852. A is the POLICY-entry button; once enabled it
+        must do nothing (Y is the deliberate downshift).
+        """
+        port = FakePort()
+        runtime = PolicyRuntime(port, num_actions=port.num_actions)
+        runtime.set_robot_state("MOVE_TO_DEFAULT")
+        runtime.state.policy_enabled = True
+        runtime.state.current_policy_mode = "motion"
+        runtime.state.target_dof_pos_onnx = port.motion_default_angles_onnx.copy()
+        publishes_before = port.publish_control_count
+
+        port.remote_controller.button[KeyMap.A] = 1
+        runtime.handle_low_state(SimpleNamespace(wireless_remote=b""))
+
+        self.assertEqual(runtime.state.current_policy_mode, "motion")
+        np.testing.assert_allclose(
+            runtime.state.target_dof_pos_onnx,
+            port.motion_default_angles_onnx,
+        )
+        self.assertEqual(port.publish_control_count, publishes_before)
+
     def test_b_button_refuses_motion_until_vr_ready_when_teleop_enabled(self):
         port = FakePort()
         runtime = PolicyRuntime(port, num_actions=port.num_actions)

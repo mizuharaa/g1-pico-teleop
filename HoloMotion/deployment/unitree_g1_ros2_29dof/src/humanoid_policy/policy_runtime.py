@@ -161,7 +161,19 @@ class PolicyRuntime:
         self.port._lowstate_msg = ls_msg
         self.port.remote_controller.set(ls_msg.wireless_remote)
 
-        if self._is_button_pressed(KeyMap.A) and self.state.robot_state_ready:
+        # LOCAL PATCH (2026-08-14): A had no re-entry guard. Stock fires
+        # enable_velocity_policy() on EVERY A press while robot_state_ready,
+        # including mid-run in motion mode. That path snaps
+        # target_dof_pos_onnx to velocity_default_angles_onnx with NO blend
+        # (unlike switch_to_velocity_mode, which captures mode_blend_from_real)
+        # -- container 0811_165852 logged 7 mid-run re-enable snaps in 4.4 s.
+        # A is the MOVE_TO_DEFAULT -> POLICY entry button; re-pressing it while
+        # already enabled must be a no-op. Use Y for a deliberate downshift.
+        if (
+            self._is_button_pressed(KeyMap.A)
+            and self.state.robot_state_ready
+            and not self.state.policy_enabled
+        ):
             self.enable_velocity_policy()
 
         if (
@@ -195,6 +207,13 @@ class PolicyRuntime:
             self._handle_motion_clip_selection()
 
     def enable_velocity_policy(self) -> None:
+        # LOCAL PATCH (2026-08-14): clear any in-flight mode blend. Stock never
+        # touches mode_blend_t0/mode_blend_from_real here, so a blend still
+        # running from a previous B/Y switch would keep interpolating toward a
+        # pose this function has just overwritten -- the blend outlives the
+        # state it was captured for. Entry is a hard reset; blend state must go.
+        self.state.mode_blend_t0 = None
+        self.state.mode_blend_from_real = None
         self.state.policy_enabled = True
         self.state.current_policy_mode = "velocity"
         self.state.motion_uses_vr_reference = False
