@@ -270,10 +270,27 @@ joint_limits:
     right_wrist_pitch_joint: 5
     right_wrist_yaw_joint: 5
 
+# LOCAL PATCH (2026-08-14): stock ships all three at 2.0. The comment claims
+# "50% more" but the code (main_node.cpp PolicyActionHandler) expands the range
+# about its MIDPOINT by this factor, so 2.0 doubles the half-range:
+#
+#   left_ankle_pitch_joint: [-0.87267, 0.5236]
+#     mid  = -0.174535 ; half = 0.698135 ; half*2.0 = 1.39627
+#     max  = -0.174535 + 1.39627 = +1.2217 rad   (physical max +0.5236)
+#
+# +1.2217 rad is exactly the ankle command measured on the A-stand (AUDIT
+# 2026-08-11): the ankle was driven 2.33x past its hard stop -> heels lift ->
+# the "leans forward on tippy toes" symptom. Same math gave the knee a 4.36 rad
+# (250 deg) ceiling and waist_pitch +/-60 deg against a +/-30 deg joint, which
+# is how waist_pitch reached 130 C / fault 512 twice.
+#
+# 1.0 = clamp to the real joint limits. This is the ONLY fix in this series that
+# takes effect without rebuilding the C++ node: limit_scales is read at runtime
+# in loadConfig(), so the stock Jul-16 binary honours it.
 limit_scales:
-  position: 2.0 # Allows 50% more range of motion
-  velocity: 2.0
-  effort: 2.0
+  position: 1.0
+  velocity: 1.0
+  effort: 1.0
 
 # move to default position
 # joint_names and default_position are auto-generated from complete_dof_order and default_joint_angles

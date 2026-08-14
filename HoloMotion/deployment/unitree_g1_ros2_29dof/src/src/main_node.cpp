@@ -10,6 +10,8 @@
  #include "unitree_hg/msg/low_state.hpp"
  #include "unitree_hg/msg/motor_cmd.hpp"
  #include <ament_index_cpp/get_package_share_directory.hpp>
+ #include <algorithm>  // LOCAL PATCH (2026-08-14): std::clamp / std::find (was transitive)
+ #include <cmath>      // LOCAL PATCH (2026-08-14): std::isfinite in PolicyActionHandler
  #include <map>
  #include <sstream>
  #include <std_msgs/msg/float32_multi_array.hpp>
@@ -414,10 +416,18 @@
              std::stringstream deviation_msg;
              const double position_threshold = 0.4;
  
-             // List of lower body joints to check
+             // LOCAL PATCH (2026-08-14): these names were missing the "_joint"
+             // suffix that complete_dof_order actually supplies (see
+             // g1_29dof_holomotion.yaml). std::find therefore NEVER matched,
+             // every joint hit the `continue` below, the loop inspected nothing
+             // and positions_ok stayed unconditionally true -- i.e. the A-press
+             // deviation gate was dead code and A always entered POLICY no
+             // matter how far the legs were from the default pose.
              std::vector<std::string> lower_body_joints = {
-                 "left_hip_yaw", "left_hip_roll", "left_hip_pitch", "left_knee", "left_ankle_pitch", "left_ankle_roll",
-                 "right_hip_yaw", "right_hip_roll", "right_hip_pitch", "right_knee", "right_ankle_pitch", "right_ankle_roll"
+                 "left_hip_yaw_joint", "left_hip_roll_joint", "left_hip_pitch_joint",
+                 "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
+                 "right_hip_yaw_joint", "right_hip_roll_joint", "right_hip_pitch_joint",
+                 "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint"
              };
  
              for (int i = 0; i < G1_NUM_MOTOR; ++i) {
@@ -627,13 +637,25 @@
                     dof_name.c_str(), policy_kp, policy_kd);
        }
        
-       // Use policy kp/kd values directly without torque limiting
+       // LOCAL PATCH (2026-08-14): stock comment here read "Use policy kp/kd
+       // values directly without torque limiting" -- and meant it. limitTorque*
+       // is applied in MOVE_TO_DEFAULT but was never called in POLICY, which is
+       // the state we actually run in. With a target clamped only to 2x the
+       // joint range, a railed joint sat at a large persistent error against
+       // kp=300 with no cap: sustained saturation (waist_pitch -> 130 C /
+       // fault 512) and, with kd=5 against kp=300, the 2.1-2.5 Hz limit cycle
+       // logged as "violent twitching". Route through the limiter that was
+       // already written and sitting unused.
+       auto [limited_kp, limited_kd] = limitTorqueWithCustomGains(
+           dof_name, target_pos, motor[motor_idx].q, motor[motor_idx].dq,
+           policy_kp, policy_kd);
+
        low_command.motor_cmd[motor_idx].mode = 1;
        low_command.motor_cmd[motor_idx].tau = 0.0;
        low_command.motor_cmd[motor_idx].q = target_pos;
        low_command.motor_cmd[motor_idx].dq = 0.0;
-       low_command.motor_cmd[motor_idx].kp = policy_kp;
-       low_command.motor_cmd[motor_idx].kd = policy_kd;
+       low_command.motor_cmd[motor_idx].kp = limited_kp;
+       low_command.motor_cmd[motor_idx].kd = limited_kd;
      }
    }
  
@@ -713,7 +735,20 @@
        const auto &dof_name = policy_dof_order[i];
  
        double calculated_pos = policy_action_data[i];
-       
+
+       // LOCAL PATCH (2026-08-14): reject non-finite targets. std::clamp does
+       // NOT sanitise NaN -- both `NaN < min_pos` and `NaN > max_pos` are false,
+       // so the guard below is skipped entirely and NaN lands in
+       // target_dof_pos, from where SendPolicyCommand publishes it to the motor
+       // at full kp. Hold the last good target instead (the policy node logs
+       // NaNs but still publishes them; see AUDIT 2026-08-11 finding 2).
+       if (!std::isfinite(calculated_pos)) {
+         RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                              "Non-finite action for joint %s; holding last target",
+                              dof_name.c_str());
+         continue;  // leaves target_dof_pos[dof_name] at its previous value
+       }
+
        // Check if the target position is within joint limits (with scaling)
        if (joint_position_limits.find(dof_name) != joint_position_limits.end()) {
          // Calculate the middle point of the range
