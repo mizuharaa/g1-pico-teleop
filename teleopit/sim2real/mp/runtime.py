@@ -1998,10 +1998,17 @@ class _RobotControlWorker:
 
     def _toggle_joystick_mode(self) -> None:
         if self.mode == RobotMode.JOYSTICK:
-            operator_logger.info("joystick -> STANDING")
-            self._enter_standing()
+            if getattr(self, "_joy_entered_from_mocap", False):
+                # round-trip: return to MOCAP through the standing gate
+                operator_logger.info("joystick -> MOCAP (re-entry via standing gate)")
+                self._enter_standing()
+                self._mocap_entry_requested = True
+            else:
+                operator_logger.info("joystick -> STANDING")
+                self._enter_standing()
             return
-        if self.mode in (RobotMode.MOCAP, RobotMode.ARMS):
+        self._joy_entered_from_mocap = self.mode in (RobotMode.MOCAP, RobotMode.ARMS)
+        if self._joy_entered_from_mocap:
             # route through the proven mocap->standing transition, then enter
             operator_logger.info("mocap -> STANDING -> JOYSTICK")
             self._enter_standing()
@@ -2020,6 +2027,11 @@ class _RobotControlWorker:
         if self.remote.X.on_pressed:
             operator_logger.info("X -> STANDING (exit joystick)")
             self._enter_standing()
+            return
+        if self.remote.Y.on_pressed:
+            operator_logger.info("Y -> MOCAP (from joystick, via standing gate)")
+            self._enter_standing()
+            self._mocap_entry_requested = True
             return
         pkt = self._controller_axes_sub.recv_latest()
         if isinstance(pkt, SnapshotPacket):
@@ -2040,6 +2052,13 @@ class _RobotControlWorker:
             vx = _dz(ly) * self._joy_vx_max
             vy = -_dz(lx) * self._joy_vy_max
             wz = -_dz(rx) * self._joy_wz_max
+            now_dbg = time.monotonic()
+            if now_dbg - getattr(self, "_joy_dbg_last_s", 0.0) > 2.0:
+                self._joy_dbg_last_s = now_dbg
+                operator_logger.info(
+                    "joystick axes L(%.2f,%.2f) R(%.2f) -> v(%.2f,%.2f) w(%.2f)",
+                    lx, ly, rx, vx, vy, wz,
+                )
         dt = self.dt
         ca = float(np.cos(self._joy_yaw))
         sa = float(np.sin(self._joy_yaw))
