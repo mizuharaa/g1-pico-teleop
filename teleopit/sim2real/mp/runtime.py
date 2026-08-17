@@ -641,6 +641,7 @@ def _run_pico_io_worker(
             pause_debounce_s=float(cfg_get(input_cfg, "pause_debounce_s", 0.25)),
             arms_button=cfg_get(input_cfg, "arms_button", "B"),
             arms_debounce_s=float(cfg_get(input_cfg, "arms_debounce_s", cfg_get(input_cfg, "pause_debounce_s", 0.25))),
+            foot_z_gain=float(cfg_get(input_cfg, "foot_z_gain", 1.0)),
             bridge_host=str(cfg_get(input_cfg, "bridge_host", "0.0.0.0")),
             bridge_port=int(cfg_get(input_cfg, "bridge_port", 63901)),
             bridge_discovery=bool(cfg_get(input_cfg, "bridge_discovery", True)),
@@ -1529,8 +1530,12 @@ class _RobotControlWorker:
                     if pending == "joystick":
                         self._enter_joystick_mode()
                         return
-                    operator_logger.info("settled -> requesting MOCAP re-entry")
-                    self._mocap_entry_requested = True
+                    # 2026-08-17 fall fix: never auto-enter mocap — the pilot
+                    # is still in driving posture. Require an explicit Y after
+                    # they align (the manual entry was always the safe one).
+                    operator_logger.info(
+                        "settled in STANDING -- ALIGN YOUR BODY to the robot, then press Y for teleop"
+                    )
             reentry_request = self._mocap_reentry_armed and self.remote.Y.pressed
             if self.remote.Y.on_pressed or reentry_request:
                 self._mocap_entry_requested = True

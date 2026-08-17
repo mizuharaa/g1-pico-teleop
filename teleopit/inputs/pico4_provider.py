@@ -226,6 +226,7 @@ class Pico4InputProvider(RealtimeInputProvider):
         arms_debounce_s: float | None = None,
         joystick_button: str | None = "right_axis_click",
         joystick_debounce_s: float | None = None,
+        foot_z_gain: float = 1.0,
         bridge_host: str = "0.0.0.0",
         bridge_port: int = 63901,
         bridge_discovery: bool = True,
@@ -287,6 +288,7 @@ class Pico4InputProvider(RealtimeInputProvider):
         self._hand_snapshot: PicoHandSnapshot | None = None
         self._head_pose_snapshot: PicoHeadPoseSnapshot | None = None
         self._ground_alignment_offset: float | None = None
+        self._foot_z_gain = max(0.5, min(3.0, float(foot_z_gain)))
         self._bridge = bridge_cls(
             host=bridge_host,
             port=int(bridge_port),
@@ -488,6 +490,7 @@ class Pico4InputProvider(RealtimeInputProvider):
                 timestamp = self._last_frame_timestamp + 1e-6
 
             human_frame = self._apply_ground_alignment(human_frame)
+            human_frame = self._apply_foot_lift_gain(human_frame)
             self._frame_cache.append(human_frame, timestamp, fps_timestamp=timestamp)
             self._last_raw_body_joints = body_joints.copy()
             self._last_frame_timestamp = timestamp
@@ -673,6 +676,24 @@ class Pico4InputProvider(RealtimeInputProvider):
         for name, (pos, quat) in body_pose_dict.items():
             result[name] = (np.asarray(pos, dtype=np.float64), np.asarray(quat, dtype=np.float64))
         return result
+
+    def _apply_foot_lift_gain(self, human_frame: HumanFrame) -> HumanFrame:
+        """Amplify foot/ankle height above ground (2026-08-17): the policy
+        absorbs small reference foot lifts, so stair-steps and light steps read
+        as nothing on the robot. Gain > 1 makes the pilot's leg lifts land."""
+        g = self._foot_z_gain
+        if abs(g - 1.0) < 1e-6:
+            return human_frame
+        boosted: HumanFrame = {}
+        for name, (pos, quat) in human_frame.items():
+            if ("Foot" in name) or ("Ankle" in name) or ("Toe" in name):
+                p = np.asarray(pos, dtype=np.float64).copy()
+                if p[2] > 0.0:
+                    p[2] = p[2] * g
+                boosted[name] = (p, np.asarray(quat, dtype=np.float64))
+            else:
+                boosted[name] = (pos, quat)
+        return boosted
 
     def _apply_ground_alignment(self, human_frame: HumanFrame) -> HumanFrame:
         """Apply one fixed Z offset so the initial Pico skeleton sits on the floor."""

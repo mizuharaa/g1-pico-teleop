@@ -22,3 +22,4 @@ video:
   height: 720
   fps: 30
   device: null
+foot_z_gain: 1.6   # amplify pilot foot lifts (stair-steps/light steps were absorbed)
