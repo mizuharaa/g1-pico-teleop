@@ -56,7 +56,7 @@
   ],
   "left_knee_link": [
    "Left_Knee",
-   50,
+   35,
    10,
    [
     0.0,
@@ -105,7 +105,7 @@
   ],
   "right_knee_link": [
    "Right_Knee",
-   50,
+   35,
    10,
    [
     0.0,
@@ -284,7 +284,7 @@
   ],
   "left_knee_link": [
    "Left_Knee",
-   50,
+   35,
    5,
    [
     0.0,
@@ -333,7 +333,7 @@
   ],
   "right_knee_link": [
    "Right_Knee",
-   50,
+   35,
    5,
    [
     0.0,

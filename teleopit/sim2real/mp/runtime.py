@@ -1339,6 +1339,9 @@ class _RobotControlWorker:
         self._joy_vy_max = float(cfg_get(joy_cfg, "vy_max", 0.3))
         self._joy_wz_max = float(cfg_get(joy_cfg, "wz_max", 0.8))
         self._joy_stick_deadzone = float(cfg_get(joy_cfg, "stick_deadzone", 0.12))
+        self._joy_settle_s = float(cfg_get(joy_cfg, "settle_s", 1.5))
+        self._pending_after_settle = None
+        self._settle_until_s = 0.0
         self._joy_qpos = self._standing_qpos.copy() if hasattr(self, "_standing_qpos") else None
         self._joy_yaw = 0.0
         self._joy_controller_snapshot = None
@@ -1516,6 +1519,18 @@ class _RobotControlWorker:
                 operator_logger.info("Start -> STANDING")
                 self._enter_standing()
         elif self.mode == RobotMode.STANDING:
+            pending = getattr(self, "_pending_after_settle", None)
+            if pending is not None:
+                if self.remote.X.on_pressed:
+                    operator_logger.info("X -> cancel pending %s, stay STANDING", pending)
+                    self._pending_after_settle = None
+                elif time.monotonic() >= self._settle_until_s:
+                    self._pending_after_settle = None
+                    if pending == "joystick":
+                        self._enter_joystick_mode()
+                        return
+                    operator_logger.info("settled -> requesting MOCAP re-entry")
+                    self._mocap_entry_requested = True
             reentry_request = self._mocap_reentry_armed and self.remote.Y.pressed
             if self.remote.Y.on_pressed or reentry_request:
                 self._mocap_entry_requested = True
@@ -1996,25 +2011,15 @@ class _RobotControlWorker:
             )
             self._enter_standing()
 
-    def _toggle_joystick_mode(self) -> None:
-        if self.mode == RobotMode.JOYSTICK:
-            if getattr(self, "_joy_entered_from_mocap", False):
-                # round-trip: return to MOCAP through the standing gate
-                operator_logger.info("joystick -> MOCAP (re-entry via standing gate)")
-                self._enter_standing()
-                self._mocap_entry_requested = True
-            else:
-                operator_logger.info("joystick -> STANDING")
-                self._enter_standing()
-            return
-        self._joy_entered_from_mocap = self.mode in (RobotMode.MOCAP, RobotMode.ARMS)
-        if self._joy_entered_from_mocap:
-            # route through the proven mocap->standing transition, then enter
-            operator_logger.info("mocap -> STANDING -> JOYSTICK")
-            self._enter_standing()
-        elif self.mode != RobotMode.STANDING:
-            operator_logger.info("JOYSTICK mode is only enterable from STANDING/MOCAP (current: %s)", self.mode.value)
-            return
+    def _exit_joystick_to_standing(self) -> None:
+        """Leave JOYSTICK safely: drop accumulated reference yaw/position so
+        standing re-aligns to the robot's ACTUAL pose (2026-08-17 collapse fix:
+        stale alignment made the policy correct the whole session yaw at once)."""
+        self._ref_proc.reset_velocity_state()
+        self._ref_proc.reset_alignment()
+        self._enter_standing()
+
+    def _enter_joystick_mode(self) -> None:
         self._joy_qpos = self._standing_qpos.copy()
         self._joy_yaw = 0.0
         self._joy_controller_snapshot = None
@@ -2023,15 +2028,45 @@ class _RobotControlWorker:
         self.mode = RobotMode.JOYSTICK
         operator_logger.info("mode -> JOYSTICK (sticks: left=walk/strafe right=turn; X or stick-click exits)")
 
+    def _toggle_joystick_mode(self) -> None:
+        now_s = time.monotonic()
+        if self.mode == RobotMode.JOYSTICK:
+            self._exit_joystick_to_standing()
+            if getattr(self, "_joy_entered_from_mocap", False):
+                operator_logger.info(
+                    "joystick -> STANDING, settling %.1fs, then MOCAP", self._joy_settle_s
+                )
+                self._pending_after_settle = "mocap"
+                self._settle_until_s = now_s + self._joy_settle_s
+            else:
+                operator_logger.info("joystick -> STANDING")
+            return
+        self._joy_entered_from_mocap = self.mode in (RobotMode.MOCAP, RobotMode.ARMS)
+        if self._joy_entered_from_mocap:
+            operator_logger.info(
+                "mocap -> STANDING, settling %.1fs, then JOYSTICK", self._joy_settle_s
+            )
+            self._enter_standing()
+            self._pending_after_settle = "joystick"
+            self._settle_until_s = now_s + self._joy_settle_s
+            return
+        if self.mode != RobotMode.STANDING:
+            operator_logger.info("JOYSTICK mode is only enterable from STANDING/MOCAP (current: %s)", self.mode.value)
+            return
+        self._enter_joystick_mode()
+
     def _joystick_step(self) -> None:
         if self.remote.X.on_pressed:
             operator_logger.info("X -> STANDING (exit joystick)")
-            self._enter_standing()
+            self._exit_joystick_to_standing()
             return
         if self.remote.Y.on_pressed:
-            operator_logger.info("Y -> MOCAP (from joystick, via standing gate)")
-            self._enter_standing()
-            self._mocap_entry_requested = True
+            operator_logger.info(
+                "Y -> STANDING, settling %.1fs, then MOCAP", self._joy_settle_s
+            )
+            self._exit_joystick_to_standing()
+            self._pending_after_settle = "mocap"
+            self._settle_until_s = time.monotonic() + self._joy_settle_s
             return
         pkt = self._controller_axes_sub.recv_latest()
         if isinstance(pkt, SnapshotPacket):

@@ -175,3 +175,4 @@ joystick:
   vy_max: 0.55      # m/s strafe cap
   wz_max: 1.1      # rad/s turn cap
   stick_deadzone: 0.12
+  settle_s: 1.5    # STANDING dwell between mode swaps (collapse fix 2026-08-17)
