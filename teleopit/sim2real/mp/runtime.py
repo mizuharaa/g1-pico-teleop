@@ -1540,7 +1540,9 @@ class _RobotControlWorker:
                     operator_logger.info("Y -> MOCAP")
                     self._transition_to_mocap()
                 elif self.remote.Y.on_pressed or reentry_request:
-                    operator_logger.warning("Y -> waiting for fresh retarget reference")
+                    operator_logger.warning(
+                        "Y -> no body tracking data (wake the ankle trackers / check PicoBridge), holding STANDING"
+                    )
         elif self.mode in (RobotMode.MOCAP, RobotMode.ARMS):
             if self.provider_kind == "bvh" and self.remote.B.on_pressed:
                 operator_logger.info("B -> replay BVH from frame 0")
@@ -2074,9 +2076,11 @@ class _RobotControlWorker:
         vx = vy = wz = 0.0
         snap = self._joy_controller_snapshot
         if snap is not None:
-            lx = float(getattr(snap.left, "axis_x", 0.0))
+            # left-stick X never arrives from the PicoBridge app (measured
+            # 2026-08-17) -> strafe lives on RIGHT stick Y instead.
             ly = float(getattr(snap.left, "axis_y", 0.0))
             rx = float(getattr(snap.right, "axis_x", 0.0))
+            ry = float(getattr(snap.right, "axis_y", 0.0))
             dzn = self._joy_stick_deadzone
 
             def _dz(v: float) -> float:
@@ -2085,14 +2089,14 @@ class _RobotControlWorker:
                 return (v - np.sign(v) * dzn) / (1.0 - dzn)
 
             vx = _dz(ly) * self._joy_vx_max
-            vy = -_dz(lx) * self._joy_vy_max
+            vy = -_dz(ry) * self._joy_vy_max
             wz = -_dz(rx) * self._joy_wz_max
             now_dbg = time.monotonic()
             if now_dbg - getattr(self, "_joy_dbg_last_s", 0.0) > 2.0:
                 self._joy_dbg_last_s = now_dbg
                 operator_logger.info(
                     "joystick axes L(%.2f,%.2f) R(%.2f) -> v(%.2f,%.2f) w(%.2f)",
-                    lx, ly, rx, vx, vy, wz,
+                    ry, ly, rx, vx, vy, wz,
                 )
         dt = self.dt
         ca = float(np.cos(self._joy_yaw))
