@@ -2001,8 +2001,12 @@ class _RobotControlWorker:
             operator_logger.info("joystick -> STANDING")
             self._enter_standing()
             return
-        if self.mode != RobotMode.STANDING:
-            operator_logger.info("JOYSTICK mode is only enterable from STANDING (current: %s)", self.mode.value)
+        if self.mode in (RobotMode.MOCAP, RobotMode.ARMS):
+            # route through the proven mocap->standing transition, then enter
+            operator_logger.info("mocap -> STANDING -> JOYSTICK")
+            self._enter_standing()
+        elif self.mode != RobotMode.STANDING:
+            operator_logger.info("JOYSTICK mode is only enterable from STANDING/MOCAP (current: %s)", self.mode.value)
             return
         self._joy_qpos = self._standing_qpos.copy()
         self._joy_yaw = 0.0
