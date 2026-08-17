@@ -24,6 +24,11 @@ default_angles: [-0.312, 0, 0, 0.669, -0.363, 0,
                  0.2, 0.2, 0, 0.6, 0, 0, 0,
                  0.2, -0.2, 0, 0.6, 0, 0, 0]
 
+# 2026-08-17: waist_pitch action_scale RESTORED to 0.4386. Root cause of the
+# "jam" was the G1 waist LOCK (mobile-app config + physical fastener screws
+# left by previous devs), now removed/unlocked by the operator. The 08-14
+# freeze (0.0) is the rollback value if the waist ever stalls again
+# (watch waist_pitch tau/temp on the first sessions).
 action_scale: [0.5475, 0.3507, 0.5475, 0.3507, 0.4386, 0.4386,
                0.5475, 0.3507, 0.5475, 0.3507, 0.4386, 0.4386,
                0.5475, 0.4386, 0.4386,

@@ -13,8 +13,13 @@ retarget_buffer_enabled: true
 retarget_buffer_window_s: 0.5
 retarget_buffer_delay_s: null  # null = auto use one input-frame delay for timeline sampling
 realtime_buffer_warmup_steps: 2
-reference_velocity_smoothing_alpha: 0.35
-reference_anchor_velocity_smoothing_alpha: 0.25
+# 2026-08-17 audit RC2/RC6: alphas raised 0.35/0.25 -> 0.6/0.5 (sim-verified:
+# NO FALL, RMS 0.1145 = alpha-1.0 baseline, lag 40->20ms) with jitter handled
+# by the new deadbands instead of heavy smoothing.
+reference_velocity_smoothing_alpha: 0.6
+reference_anchor_velocity_smoothing_alpha: 0.5
+anchor_lin_vel_deadband: 0.08   # m/s, zeroes standing-still tracker jitter
+anchor_ang_vel_deadband: 0.12  # rad/s, yaw component only
 reference_steps: [0]
 reference_debug_log: false
 

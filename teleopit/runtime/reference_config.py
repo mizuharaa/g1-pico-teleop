@@ -25,6 +25,12 @@ class ReferenceConfig:
     realtime_buffer_warmup_steps: int
     reference_velocity_smoothing_alpha: float
     reference_anchor_velocity_smoothing_alpha: float
+    # Deadbands applied to finite-diff anchor velocities BEFORE smoothing.
+    # 0.0 (default) = disabled, identical to pre-2026-08-17 behavior.
+    # Purpose: tracker jitter on a standing pilot otherwise reaches the policy
+    # as small nonzero root velocity and draws corrective steps (audit RC6).
+    anchor_lin_vel_deadband: float
+    anchor_ang_vel_deadband: float
 
 
 def _resolve_delay(cfg: Any, *, provider_fps: float | None) -> float | None:
@@ -81,6 +87,11 @@ def parse_reference_config(
         default=1.0,
     )
 
+    lin_deadband = float(cfg_get(cfg, "anchor_lin_vel_deadband", 0.0))
+    ang_deadband = float(cfg_get(cfg, "anchor_ang_vel_deadband", 0.0))
+    if lin_deadband < 0.0 or ang_deadband < 0.0:
+        raise ValueError("anchor velocity deadbands must be >= 0")
+
     return ReferenceConfig(
         retarget_buffer_enabled=retarget_buffer_enabled,
         retarget_buffer_window_s=retarget_buffer_window_s,
@@ -89,4 +100,6 @@ def parse_reference_config(
         realtime_buffer_warmup_steps=warmup,
         reference_velocity_smoothing_alpha=vel_alpha,
         reference_anchor_velocity_smoothing_alpha=anchor_vel_alpha,
+        anchor_lin_vel_deadband=lin_deadband,
+        anchor_ang_vel_deadband=ang_deadband,
     )

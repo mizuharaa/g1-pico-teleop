@@ -35,6 +35,8 @@ class Sim2RealReferenceProcessor:
         num_actions: int,
         reference_velocity_smoothing_alpha: float,
         reference_anchor_velocity_smoothing_alpha: float,
+        anchor_lin_vel_deadband: float = 0.0,
+        anchor_ang_vel_deadband: float = 0.0,
     ) -> None:
         self._obs_builder = obs_builder
         self._policy = policy
@@ -46,6 +48,12 @@ class Sim2RealReferenceProcessor:
         self._fixed_reference_pivot_pos_w: Float32Array | None = None
         self._fixed_reference_xy_offset_w: Float32Array | None = None
         self._reference_alignment_target_xy_w: Float32Array | None = None
+
+        # Deadbands (0.0 = disabled): applied to finite-diff anchor velocities
+        # before smoothing so standing-still tracker jitter reads as zero
+        # root velocity instead of a small wander the policy chases (RC6).
+        self._anchor_lin_vel_deadband = float(anchor_lin_vel_deadband)
+        self._anchor_ang_vel_deadband = float(anchor_ang_vel_deadband)
 
         # Smoothers
         self._motion_joint_vel_smoother = ExponentialVecSmoother(reference_velocity_smoothing_alpha)
@@ -138,6 +146,19 @@ class Sim2RealReferenceProcessor:
             else np.asarray(target_qpos[0:2], dtype=np.float32).reshape(2).copy()
         )
 
+    def reset_velocity_state(self) -> None:
+        """Restart finite-diff velocities from zero.
+
+        Call on the first fresh reference after any hold (stale/invalid/missing
+        frames). Without this, the first fresh frame finite-differences the
+        entire missed motion at policy rate into a single-step velocity spike
+        (measured 3.5-14 rad/s), which the policy executes. Audit 2026-08-17 RC3.
+        """
+        self._last_reference_qpos = None
+        self._motion_joint_vel_smoother.reset()
+        self._motion_anchor_lin_vel_smoother.reset()
+        self._motion_anchor_ang_vel_smoother.reset()
+
     # ------------------------------------------------------------------
     # Anchor velocity computation
     # ------------------------------------------------------------------
@@ -199,6 +220,13 @@ class Sim2RealReferenceProcessor:
     def apply_anchor_vel_smoothing(
         self, lin: Float32Array, ang: Float32Array,
     ) -> tuple[Float32Array, Float32Array]:
+        if self._anchor_lin_vel_deadband > 0.0:
+            lin = np.where(
+                np.abs(lin) < self._anchor_lin_vel_deadband, 0.0, lin
+            ).astype(np.float32)
+        if self._anchor_ang_vel_deadband > 0.0 and abs(float(ang[2])) < self._anchor_ang_vel_deadband:
+            ang = ang.copy()
+            ang[2] = 0.0
         return (
             self._motion_anchor_lin_vel_smoother.apply(lin),
             self._motion_anchor_ang_vel_smoother.apply(ang),

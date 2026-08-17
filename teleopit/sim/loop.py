@@ -130,6 +130,8 @@ class SimulationLoop:
             default_dof_pos=self._default_dof_pos,
             reference_velocity_smoothing_alpha=self._ref_cfg.reference_velocity_smoothing_alpha,
             reference_anchor_velocity_smoothing_alpha=self._ref_cfg.reference_anchor_velocity_smoothing_alpha,
+            anchor_lin_vel_deadband=self._ref_cfg.anchor_lin_vel_deadband,
+            anchor_ang_vel_deadband=self._ref_cfg.anchor_ang_vel_deadband,
         )
         self._publisher = RuntimePublisher(self.bus)
         self._viewer_manager = ViewerManager(

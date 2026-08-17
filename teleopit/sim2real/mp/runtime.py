@@ -1243,6 +1243,8 @@ class _RobotControlWorker:
             num_actions=self.num_actions,
             reference_velocity_smoothing_alpha=self._ref_cfg.reference_velocity_smoothing_alpha,
             reference_anchor_velocity_smoothing_alpha=self._ref_cfg.reference_anchor_velocity_smoothing_alpha,
+            anchor_lin_vel_deadband=self._ref_cfg.anchor_lin_vel_deadband,
+            anchor_ang_vel_deadband=self._ref_cfg.anchor_ang_vel_deadband,
         )
 
         self._standing_qpos = np.zeros(FULL_QPOS_DIM, dtype=np.float64)
@@ -2013,6 +2015,14 @@ class _RobotControlWorker:
                 detail=f"age={age_s:.3f}s",
             )
             return
+
+        # Stale-resume reset (audit 2026-08-17 RC3): if we were holding, the
+        # incoming frame is the first fresh one after a gap. Restart finite-diff
+        # velocities from zero instead of differencing across the entire gap.
+        if self._last_mocap_hold_reason is not None:
+            self._ref_proc.reset_velocity_state()
+            self._last_retarget_qpos = None
+            self._last_mocap_hold_reason = None
 
         robot_state = self.robot.get_state()
         self._execute_mocap_pipeline(reference.qpos, robot_state, reference.reference_window)

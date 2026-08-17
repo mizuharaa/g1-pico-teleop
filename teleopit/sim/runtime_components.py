@@ -70,6 +70,8 @@ class PolicyStepRunner:
         default_dof_pos: Float32Array,
         reference_velocity_smoothing_alpha: float = 1.0,
         reference_anchor_velocity_smoothing_alpha: float = 1.0,
+        anchor_lin_vel_deadband: float = 0.0,
+        anchor_ang_vel_deadband: float = 0.0,
     ) -> None:
         self.robot = robot
         self.controller = controller
@@ -84,6 +86,9 @@ class PolicyStepRunner:
         self._motion_joint_vel_smoother = ExponentialVecSmoother(reference_velocity_smoothing_alpha)
         self._motion_anchor_lin_vel_smoother = ExponentialVecSmoother(reference_anchor_velocity_smoothing_alpha)
         self._motion_anchor_ang_vel_smoother = ExponentialVecSmoother(reference_anchor_velocity_smoothing_alpha)
+        # Deadbands mirror Sim2RealReferenceProcessor (audit RC6); 0.0 = off.
+        self._anchor_lin_vel_deadband = float(anchor_lin_vel_deadband)
+        self._anchor_ang_vel_deadband = float(anchor_ang_vel_deadband)
         self.last_action: Float32Array = np.zeros((self.num_actions,), dtype=np.float32)
         self.last_retarget_qpos: Float64Array | None = None
         self.last_reference_qpos: Float64Array | None = None
@@ -170,8 +175,17 @@ class PolicyStepRunner:
             motion_anchor_ang_vel_w = None
         else:
             raw_motion_anchor_lin_vel_w, raw_motion_anchor_ang_vel_w = self._compute_anchor_velocities(reference_qpos)
-            motion_anchor_lin_vel_w = self._motion_anchor_lin_vel_smoother.apply(raw_motion_anchor_lin_vel_w)
-            motion_anchor_ang_vel_w = self._motion_anchor_ang_vel_smoother.apply(raw_motion_anchor_ang_vel_w)
+            lin_in = raw_motion_anchor_lin_vel_w
+            ang_in = raw_motion_anchor_ang_vel_w
+            if self._anchor_lin_vel_deadband > 0.0:
+                lin_in = np.where(
+                    np.abs(lin_in) < self._anchor_lin_vel_deadband, 0.0, lin_in
+                ).astype(np.float32)
+            if self._anchor_ang_vel_deadband > 0.0 and abs(float(ang_in[2])) < self._anchor_ang_vel_deadband:
+                ang_in = ang_in.copy()
+                ang_in[2] = 0.0
+            motion_anchor_lin_vel_w = self._motion_anchor_lin_vel_smoother.apply(lin_in)
+            motion_anchor_ang_vel_w = self._motion_anchor_ang_vel_smoother.apply(ang_in)
 
         return MotionPreparation(
             qpos=qpos,
