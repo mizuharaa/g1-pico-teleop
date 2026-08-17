@@ -167,3 +167,11 @@ mocap_switch:
 hydra:
   run:
     dir: .
+
+# Joystick walking mode (2026-08-17): press RIGHT STICK CLICK to toggle from
+# STANDING. Left stick = walk/strafe, right stick X = turn. X exits to STANDING.
+joystick:
+  vx_max: 0.5      # m/s forward/back cap
+  vy_max: 0.3      # m/s strafe cap
+  wz_max: 0.8      # rad/s turn cap
+  stick_deadzone: 0.12

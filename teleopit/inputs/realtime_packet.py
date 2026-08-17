@@ -17,6 +17,8 @@ HumanFrame = Dict[str, Tuple[NDArray[np.float64], NDArray[np.float64]]]
 class ControlEventType(str, Enum):
     TOGGLE_PAUSE = "toggle_pause"
     TOGGLE_ARMS = "toggle_arms"
+    # 2026-08-17: stick-driven walking mode (velocity-command reference)
+    TOGGLE_JOYSTICK = "toggle_joystick"
 
 
 @dataclass(frozen=True)

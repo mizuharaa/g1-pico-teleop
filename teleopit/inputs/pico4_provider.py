@@ -63,6 +63,8 @@ class PicoControllerState:
     grip: float
     trigger: float
     present: bool = True
+    axis_x: float = 0.0
+    axis_y: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -222,6 +224,8 @@ class Pico4InputProvider(RealtimeInputProvider):
         pause_debounce_s: float = 0.25,
         arms_button: str | None = "B",
         arms_debounce_s: float | None = None,
+        joystick_button: str | None = "right_axis_click",
+        joystick_debounce_s: float | None = None,
         bridge_host: str = "0.0.0.0",
         bridge_port: int = 63901,
         bridge_discovery: bool = True,
@@ -263,14 +267,19 @@ class Pico4InputProvider(RealtimeInputProvider):
         self._pending_control_events: deque[ControlEvent] = deque()
         self._pause_button = None if pause_button in (None, "", "null") else str(pause_button)
         self._arms_button = None if arms_button in (None, "", "null") else str(arms_button)
+        self._joystick_button = None if joystick_button in (None, "", "null") else str(joystick_button)
         self._pause_debounce_s = max(float(pause_debounce_s), 0.0)
         self._arms_debounce_s = self._pause_debounce_s if arms_debounce_s is None else max(float(arms_debounce_s), 0.0)
+        self._joystick_debounce_s = self._pause_debounce_s if joystick_debounce_s is None else max(float(joystick_debounce_s), 0.0)
         self._pause_button_path = self._resolve_button_path(self._pause_button)
         self._arms_button_path = self._resolve_button_path(self._arms_button)
+        self._joystick_button_path = self._resolve_button_path(self._joystick_button)
         self._last_pause_button_pressed = False
         self._last_arms_button_pressed = False
+        self._last_joystick_button_pressed = False
         self._last_pause_toggle_timestamp: float | None = None
         self._last_arms_toggle_timestamp: float | None = None
+        self._last_joystick_toggle_timestamp: float | None = None
         self._last_raw_body_joints: NDArray[np.float64] | None = None
         self._last_frame_timestamp: float | None = None
         self._last_source_seq: int | None = None
@@ -561,6 +570,16 @@ class Pico4InputProvider(RealtimeInputProvider):
             last_toggle_attr="_last_arms_toggle_timestamp",
             debounce_s=self._arms_debounce_s,
         ) or emitted
+        emitted = self._poll_button_control_event(
+            frame,
+            timestamp=timestamp,
+            button_path=self._joystick_button_path,
+            button_label=self._joystick_button,
+            event_type=ControlEventType.TOGGLE_JOYSTICK,
+            last_pressed_attr="_last_joystick_button_pressed",
+            last_toggle_attr="_last_joystick_toggle_timestamp",
+            debounce_s=self._joystick_debounce_s,
+        ) or emitted
         return emitted
 
     def _poll_button_control_event(
@@ -616,6 +635,8 @@ class Pico4InputProvider(RealtimeInputProvider):
             grip=float(axis.get("grip", 0.0)),
             trigger=float(axis.get("trigger", 0.0)),
             present=controller is not None,
+            axis_x=float(axis.get("x", 0.0)),
+            axis_y=float(axis.get("y", 0.0)),
         )
 
     @staticmethod
