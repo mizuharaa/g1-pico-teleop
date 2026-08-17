@@ -177,13 +177,19 @@ class PolicyStepRunner:
             raw_motion_anchor_lin_vel_w, raw_motion_anchor_ang_vel_w = self._compute_anchor_velocities(reference_qpos)
             lin_in = raw_motion_anchor_lin_vel_w
             ang_in = raw_motion_anchor_ang_vel_w
+            # Soft-knee deadband — mirrors Sim2RealReferenceProcessor (rev2)
             if self._anchor_lin_vel_deadband > 0.0:
-                lin_in = np.where(
-                    np.abs(lin_in) < self._anchor_lin_vel_deadband, 0.0, lin_in
-                ).astype(np.float32)
-            if self._anchor_ang_vel_deadband > 0.0 and abs(float(ang_in[2])) < self._anchor_ang_vel_deadband:
+                n = float(np.linalg.norm(lin_in))
+                if n < self._anchor_lin_vel_deadband:
+                    lin_in = np.zeros_like(lin_in)
+                else:
+                    lin_in = (lin_in * ((n - self._anchor_lin_vel_deadband) / n)).astype(np.float32)
+            if self._anchor_ang_vel_deadband > 0.0:
+                wz = float(ang_in[2])
                 ang_in = ang_in.copy()
-                ang_in[2] = 0.0
+                ang_in[2] = 0.0 if abs(wz) < self._anchor_ang_vel_deadband else (
+                    wz - np.sign(wz) * self._anchor_ang_vel_deadband
+                )
             motion_anchor_lin_vel_w = self._motion_anchor_lin_vel_smoother.apply(lin_in)
             motion_anchor_ang_vel_w = self._motion_anchor_ang_vel_smoother.apply(ang_in)
 

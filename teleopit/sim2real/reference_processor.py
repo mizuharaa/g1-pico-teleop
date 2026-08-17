@@ -220,13 +220,22 @@ class Sim2RealReferenceProcessor:
     def apply_anchor_vel_smoothing(
         self, lin: Float32Array, ang: Float32Array,
     ) -> tuple[Float32Array, Float32Array]:
+        # Soft-knee deadband (2026-08-17 rev2): subtract the threshold from the
+        # velocity NORM and rescale, instead of hard-zeroing components. Jitter
+        # below the knee still reads as zero, but subtle intentional motion
+        # passes through proportionally (hard zeroing ate small steps).
         if self._anchor_lin_vel_deadband > 0.0:
-            lin = np.where(
-                np.abs(lin) < self._anchor_lin_vel_deadband, 0.0, lin
-            ).astype(np.float32)
-        if self._anchor_ang_vel_deadband > 0.0 and abs(float(ang[2])) < self._anchor_ang_vel_deadband:
+            n = float(np.linalg.norm(lin))
+            if n < self._anchor_lin_vel_deadband:
+                lin = np.zeros_like(lin)
+            else:
+                lin = (lin * ((n - self._anchor_lin_vel_deadband) / n)).astype(np.float32)
+        if self._anchor_ang_vel_deadband > 0.0:
+            wz = float(ang[2])
             ang = ang.copy()
-            ang[2] = 0.0
+            ang[2] = 0.0 if abs(wz) < self._anchor_ang_vel_deadband else (
+                wz - np.sign(wz) * self._anchor_ang_vel_deadband
+            )
         return (
             self._motion_anchor_lin_vel_smoother.apply(lin),
             self._motion_anchor_ang_vel_smoother.apply(ang),
