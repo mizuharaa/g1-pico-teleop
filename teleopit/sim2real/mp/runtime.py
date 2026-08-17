@@ -904,6 +904,13 @@ def _run_pico_reference_worker(
         )
         runtime_support_validated = ref_cfg.reference_delay_s is not None or not reference_window_builder.requires_timeline
         last_valid_qpos: Float64Array | None = None
+        # root_xy_gain (audit 2026-08-17 RC4): amplifies the pilot's root XY
+        # displacement, anchored at the first frame of each mocap session.
+        # Applied at the source (before timeline insertion) so positions,
+        # finite-diff velocities, and reference windows all stay consistent.
+        # 1.0 = off. 1.143 neutralizes GMR's fixed 0.875 under-scaling.
+        root_xy_gain = float(ref_cfg.root_xy_gain)
+        root_gain_anchor_xy: Float64Array | None = None
 
         def _reset_realtime_reference_state(*, reset_retargeter: bool) -> None:
             nonlocal last_body_timestamp_s
@@ -911,6 +918,8 @@ def _run_pico_reference_worker(
             nonlocal resolved_reference_delay_s
             nonlocal runtime_support_validated
             nonlocal last_valid_qpos
+            nonlocal root_gain_anchor_xy
+            root_gain_anchor_xy = None
             if timeline is not None:
                 timeline.clear()
             if reference_manager is not None:
@@ -1000,6 +1009,12 @@ def _run_pico_reference_worker(
                 try:
                     retargeted = retargeter.retarget(packet.frame)
                     qpos = np.asarray(retargeted, dtype=np.float64).reshape(-1)
+                    if root_xy_gain != 1.0:
+                        if root_gain_anchor_xy is None:
+                            root_gain_anchor_xy = qpos[0:2].copy()
+                        qpos[0:2] = root_gain_anchor_xy + root_xy_gain * (
+                            qpos[0:2] - root_gain_anchor_xy
+                        )
                     reference_window: ReferenceWindow | None = None
                     if timeline is not None:
                         timeline.append(qpos, float(packet.timestamp_s))

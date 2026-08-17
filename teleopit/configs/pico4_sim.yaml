@@ -22,6 +22,7 @@ reference_velocity_smoothing_alpha: 0.6
 reference_anchor_velocity_smoothing_alpha: 0.5
 anchor_lin_vel_deadband: 0.08   # m/s, zeroes standing-still tracker jitter
 anchor_ang_vel_deadband: 0.12  # rad/s, yaw component only
+root_xy_gain: 1.143  # RC4: neutralize GMR 0.875 root under-scaling ("robot moves less than me")
 reference_steps: [0]
 reference_debug_log: false
 arm_mocap:

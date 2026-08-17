@@ -31,6 +31,10 @@ class ReferenceConfig:
     # as small nonzero root velocity and draws corrective steps (audit RC6).
     anchor_lin_vel_deadband: float
     anchor_ang_vel_deadband: float
+    # Gain on the pilot's root XY displacement (anchored per mocap session).
+    # 1.0 = off; 1.143 neutralizes GMR's fixed 0.875 pelvis under-scaling
+    # (audit 2026-08-17 RC4, "robot moves less than me").
+    root_xy_gain: float
 
 
 def _resolve_delay(cfg: Any, *, provider_fps: float | None) -> float | None:
@@ -87,6 +91,9 @@ def parse_reference_config(
         default=1.0,
     )
 
+    root_xy_gain = float(cfg_get(cfg, "root_xy_gain", 1.0))
+    if not (0.5 <= root_xy_gain <= 2.0):
+        raise ValueError("root_xy_gain must be in [0.5, 2.0]")
     lin_deadband = float(cfg_get(cfg, "anchor_lin_vel_deadband", 0.0))
     ang_deadband = float(cfg_get(cfg, "anchor_ang_vel_deadband", 0.0))
     if lin_deadband < 0.0 or ang_deadband < 0.0:
@@ -102,4 +109,5 @@ def parse_reference_config(
         reference_anchor_velocity_smoothing_alpha=anchor_vel_alpha,
         anchor_lin_vel_deadband=lin_deadband,
         anchor_ang_vel_deadband=ang_deadband,
+        root_xy_gain=root_xy_gain,
     )

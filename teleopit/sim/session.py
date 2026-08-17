@@ -228,6 +228,8 @@ class SimLoopSession:
         self.last_live_packet_seq = -1
         self.cached_human_frame = None
         self.cached_retargeted = None
+        # root_xy_gain anchor resets with each mocap session (audit RC4)
+        self._root_gain_anchor_xy = None
 
     def reset_policy_reference_state(self, *, reset_mocap_session: bool = True) -> None:
         self._step_runner.reset()
@@ -484,6 +486,14 @@ class SimLoopSession:
             self.previous_live_timestamp = self.latest_live_timestamp
             self.latest_live_human_frame = human_frame
             retargeted_qpos = self._step_runner._retarget_to_qpos(self._retargeter.retarget(human_frame))
+            gain = float(getattr(self._loop._ref_cfg, "root_xy_gain", 1.0))
+            if gain != 1.0:
+                if getattr(self, "_root_gain_anchor_xy", None) is None:
+                    self._root_gain_anchor_xy = retargeted_qpos[0:2].copy()
+                retargeted_qpos = retargeted_qpos.copy()
+                retargeted_qpos[0:2] = self._root_gain_anchor_xy + gain * (
+                    retargeted_qpos[0:2] - self._root_gain_anchor_xy
+                )
             if self.reference_timeline is not None:
                 self.reference_timeline.append(retargeted_qpos, float(frame_timestamp))
                 if self.realtime_reference_manager is not None:
