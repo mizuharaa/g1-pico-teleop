@@ -1341,6 +1341,8 @@ class _RobotControlWorker:
         self._joy_wz_max = float(cfg_get(joy_cfg, "wz_max", 0.8))
         self._joy_stick_deadzone = float(cfg_get(joy_cfg, "stick_deadzone", 0.12))
         self._joy_settle_s = float(cfg_get(joy_cfg, "settle_s", 1.5))
+        self._mocap_entry_blend_s = float(cfg_get(cfg, "mocap_entry_blend_s", 1.0))
+        self._mocap_blend_start_s = None
         self._pending_after_settle = None
         self._settle_until_s = 0.0
         self._joy_qpos = self._standing_qpos.copy() if hasattr(self, "_standing_qpos") else None
@@ -2081,11 +2083,14 @@ class _RobotControlWorker:
         vx = vy = wz = 0.0
         snap = self._joy_controller_snapshot
         if snap is not None:
-            # left-stick X never arrives from the PicoBridge app (measured
-            # 2026-08-17) -> strafe lives on RIGHT stick Y instead.
+            # left-stick X and right-stick Y never arrive from the PicoBridge
+            # app (measured 2026-08-17) -> strafe lives on the GRIP analogs:
+            # squeeze right grip = strafe right, left grip = strafe left.
             ly = float(getattr(snap.left, "axis_y", 0.0))
             rx = float(getattr(snap.right, "axis_x", 0.0))
-            ry = float(getattr(snap.right, "axis_y", 0.0))
+            lg = float(getattr(snap.left, "grip", 0.0))
+            rg = float(getattr(snap.right, "grip", 0.0))
+            ry = rg - lg
             dzn = self._joy_stick_deadzone
 
             def _dz(v: float) -> float:
@@ -2094,7 +2099,7 @@ class _RobotControlWorker:
                 return (v - np.sign(v) * dzn) / (1.0 - dzn)
 
             vx = _dz(ly) * self._joy_vx_max
-            vy = -_dz(ry) * self._joy_vy_max
+            vy = -_dz(ry) * self._joy_vy_max  # ry = right_grip - left_grip
             wz = -_dz(rx) * self._joy_wz_max
             now_dbg = time.monotonic()
             if now_dbg - getattr(self, "_joy_dbg_last_s", 0.0) > 2.0:
@@ -2195,7 +2200,25 @@ class _RobotControlWorker:
             self._last_mocap_hold_reason = None
 
         robot_state = self.robot.get_state()
-        self._execute_mocap_pipeline(reference.qpos, robot_state, reference.reference_window)
+        ref_qpos = reference.qpos
+        blend_start = getattr(self, "_mocap_blend_start_s", None)
+        if blend_start is not None:
+            a = (time.monotonic() - blend_start) / max(self._mocap_entry_blend_s, 1e-3)
+            if a >= 1.0:
+                self._mocap_blend_start_s = None
+            else:
+                # blend JOINTS only (frame-independent); the root is anchored
+                # by the alignment layer at entry already.
+                ref_qpos = np.asarray(ref_qpos, dtype=np.float64).copy()
+                base = self._last_commanded_motion_qpos
+                base_joints = (
+                    np.asarray(base[7:7 + self.num_actions], dtype=np.float64)
+                    if base is not None
+                    else self._standing_qpos[7:7 + self.num_actions]
+                )
+                live_joints = ref_qpos[7:7 + self.num_actions]
+                ref_qpos[7:7 + self.num_actions] = base_joints + a * (live_joints - base_joints)
+        self._execute_mocap_pipeline(ref_qpos, robot_state, reference.reference_window)
 
     def _high_level_policy_step(self) -> None:
         scheduler = self._high_level_policy_scheduler
@@ -2437,6 +2460,10 @@ class _RobotControlWorker:
         return True
 
     def _transition_to_mocap(self) -> None:
+        # 2026-08-17: joint blend-in over mocap_entry_blend_s — entry was a
+        # hard snap to the pilot's pose, which falls whenever the pilot is not
+        # perfectly aligned (worst after joystick sessions).
+        self._mocap_blend_start_s = time.monotonic()
         state = self.robot.get_state()
         last_commanded = getattr(self, "_last_commanded_motion_qpos", None)
         hold_qpos = last_commanded if last_commanded is not None else self._standing_qpos
