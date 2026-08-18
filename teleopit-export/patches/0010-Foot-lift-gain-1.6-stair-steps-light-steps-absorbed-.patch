@@ -1,0 +1,106 @@
+From 8a01ae5ef0898640b934ef09d179fe6ba5f8f66c Mon Sep 17 00:00:00 2001
+From: alois <luong.alois@gmail.com>
+Date: Mon, 17 Aug 2026 16:43:03 +0700
+Subject: [PATCH 10/11] Foot lift gain 1.6 (stair-steps/light steps absorbed by
+ policy); joystick->teleop swap lands in STANDING requiring explicit Y after
+ pilot aligns (auto-entry caused falls)
+
+Co-Authored-By: Claude Fable 5 <noreply@alois>
+---
+ teleopit/configs/input/pico4.yaml |  1 +
+ teleopit/inputs/pico4_provider.py | 21 +++++++++++++++++++++
+ teleopit/sim2real/mp/runtime.py   |  9 +++++++--
+ 3 files changed, 29 insertions(+), 2 deletions(-)
+
+diff --git a/teleopit/configs/input/pico4.yaml b/teleopit/configs/input/pico4.yaml
+index dd75ed8..7bd781a 100644
+--- a/teleopit/configs/input/pico4.yaml
++++ b/teleopit/configs/input/pico4.yaml
+@@ -22,3 +22,4 @@ video:
+   height: 720
+   fps: 30
+   device: null
++foot_z_gain: 1.6   # amplify pilot foot lifts (stair-steps/light steps were absorbed)
+diff --git a/teleopit/inputs/pico4_provider.py b/teleopit/inputs/pico4_provider.py
+index 84b3248..872dad6 100644
+--- a/teleopit/inputs/pico4_provider.py
++++ b/teleopit/inputs/pico4_provider.py
+@@ -226,6 +226,7 @@ class Pico4InputProvider(RealtimeInputProvider):
+         arms_debounce_s: float | None = None,
+         joystick_button: str | None = "right_axis_click",
+         joystick_debounce_s: float | None = None,
++        foot_z_gain: float = 1.0,
+         bridge_host: str = "0.0.0.0",
+         bridge_port: int = 63901,
+         bridge_discovery: bool = True,
+@@ -287,6 +288,7 @@ class Pico4InputProvider(RealtimeInputProvider):
+         self._hand_snapshot: PicoHandSnapshot | None = None
+         self._head_pose_snapshot: PicoHeadPoseSnapshot | None = None
+         self._ground_alignment_offset: float | None = None
++        self._foot_z_gain = max(0.5, min(3.0, float(foot_z_gain)))
+         self._bridge = bridge_cls(
+             host=bridge_host,
+             port=int(bridge_port),
+@@ -488,6 +490,7 @@ class Pico4InputProvider(RealtimeInputProvider):
+                 timestamp = self._last_frame_timestamp + 1e-6
+ 
+             human_frame = self._apply_ground_alignment(human_frame)
++            human_frame = self._apply_foot_lift_gain(human_frame)
+             self._frame_cache.append(human_frame, timestamp, fps_timestamp=timestamp)
+             self._last_raw_body_joints = body_joints.copy()
+             self._last_frame_timestamp = timestamp
+@@ -674,6 +677,24 @@ class Pico4InputProvider(RealtimeInputProvider):
+             result[name] = (np.asarray(pos, dtype=np.float64), np.asarray(quat, dtype=np.float64))
+         return result
+ 
++    def _apply_foot_lift_gain(self, human_frame: HumanFrame) -> HumanFrame:
++        """Amplify foot/ankle height above ground (2026-08-17): the policy
++        absorbs small reference foot lifts, so stair-steps and light steps read
++        as nothing on the robot. Gain > 1 makes the pilot's leg lifts land."""
++        g = self._foot_z_gain
++        if abs(g - 1.0) < 1e-6:
++            return human_frame
++        boosted: HumanFrame = {}
++        for name, (pos, quat) in human_frame.items():
++            if ("Foot" in name) or ("Ankle" in name) or ("Toe" in name):
++                p = np.asarray(pos, dtype=np.float64).copy()
++                if p[2] > 0.0:
++                    p[2] = p[2] * g
++                boosted[name] = (p, np.asarray(quat, dtype=np.float64))
++            else:
++                boosted[name] = (pos, quat)
++        return boosted
++
+     def _apply_ground_alignment(self, human_frame: HumanFrame) -> HumanFrame:
+         """Apply one fixed Z offset so the initial Pico skeleton sits on the floor."""
+         if self._ground_alignment_offset is None:
+diff --git a/teleopit/sim2real/mp/runtime.py b/teleopit/sim2real/mp/runtime.py
+index d094988..c6f293c 100644
+--- a/teleopit/sim2real/mp/runtime.py
++++ b/teleopit/sim2real/mp/runtime.py
+@@ -641,6 +641,7 @@ def _run_pico_io_worker(
+             pause_debounce_s=float(cfg_get(input_cfg, "pause_debounce_s", 0.25)),
+             arms_button=cfg_get(input_cfg, "arms_button", "B"),
+             arms_debounce_s=float(cfg_get(input_cfg, "arms_debounce_s", cfg_get(input_cfg, "pause_debounce_s", 0.25))),
++            foot_z_gain=float(cfg_get(input_cfg, "foot_z_gain", 1.0)),
+             bridge_host=str(cfg_get(input_cfg, "bridge_host", "0.0.0.0")),
+             bridge_port=int(cfg_get(input_cfg, "bridge_port", 63901)),
+             bridge_discovery=bool(cfg_get(input_cfg, "bridge_discovery", True)),
+@@ -1529,8 +1530,12 @@ class _RobotControlWorker:
+                     if pending == "joystick":
+                         self._enter_joystick_mode()
+                         return
+-                    operator_logger.info("settled -> requesting MOCAP re-entry")
+-                    self._mocap_entry_requested = True
++                    # 2026-08-17 fall fix: never auto-enter mocap — the pilot
++                    # is still in driving posture. Require an explicit Y after
++                    # they align (the manual entry was always the safe one).
++                    operator_logger.info(
++                        "settled in STANDING -- ALIGN YOUR BODY to the robot, then press Y for teleop"
++                    )
+             reentry_request = self._mocap_reentry_armed and self.remote.Y.pressed
+             if self.remote.Y.on_pressed or reentry_request:
+                 self._mocap_entry_requested = True
+-- 
+2.34.1
+

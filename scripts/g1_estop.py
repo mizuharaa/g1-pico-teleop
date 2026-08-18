@@ -46,11 +46,18 @@ def damp(client) -> None:
     t0 = time.time()
     ret = client.Damp()
     dt_ms = (time.time() - t0) * 1000
-    if ret in (0, None):
+    # 2026-08-14 (QA finding): None is NOT success. The SDK returns None when
+    # the request never got a reply (e.g. "ClientStub send request error"),
+    # which is exactly the failure mode observed at crunch time. Only an
+    # explicit 0 is a confirmed ack; anything else must scream for the remote.
+    if ret == 0:
         print(f"DAMP delivered ({dt_ms:.0f} ms). Joints damping. Keep the remote in hand.")
+    elif ret is None:
+        print(f"DAMP UNCONFIRMED (no reply, {dt_ms:.0f} ms) — the robot may NOT "
+              f"be damping. USE THE REMOTE NOW (Select under custom control).")
     else:
         print(f"DAMP request FAILED (code {ret}, {dt_ms:.0f} ms) — "
-              f"USE THE REMOTE (L2+B) NOW.")
+              f"USE THE REMOTE NOW (Select under custom control).")
 
 
 def main() -> None:

@@ -1,0 +1,333 @@
+From a16e176d8cc94ee2d1b8357814f00434b0357673 Mon Sep 17 00:00:00 2001
+From: alois <luong.alois@gmail.com>
+Date: Mon, 17 Aug 2026 11:25:26 +0700
+Subject: [PATCH 01/11] Audit fixes 2026-08-17: stale-resume reset, anchor
+ deadbands, alpha rebalance, pilot height, waist unlock restore
+
+- RC3: reset finite-diff velocity state on first fresh reference after a hold
+- RC6: anchor velocity deadbands (0.08 m/s lin, 0.12 rad/s yaw), sim+real paths
+- RC2: smoothing alphas 0.35/0.25 -> 0.6/0.5 (sim-verified: no fall, RMS at
+  baseline, lag 40->20 ms)
+- pilot height 1.74 m
+- waist_pitch action_scale restored 0.0 -> 0.4386 (root cause was the G1
+  waist LOCK: app config + fastener screws from previous devs, now removed)
+
+Rollback: git checkout master -- <file>, or action_scale[14]=0.0 for the
+waist alone.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ go.sh                                    | 43 ++++++++++++++++++++++++
+ teleopit/configs/input/pico4.yaml        |  2 +-
+ teleopit/configs/pico4_sim.yaml          |  9 +++--
+ teleopit/configs/pico4_sim2real.yaml     |  9 +++--
+ teleopit/configs/robot/g1.yaml           |  5 +++
+ teleopit/runtime/reference_config.py     | 13 +++++++
+ teleopit/sim/loop.py                     |  2 ++
+ teleopit/sim/runtime_components.py       | 18 ++++++++--
+ teleopit/sim2real/mp/runtime.py          | 10 ++++++
+ teleopit/sim2real/reference_processor.py | 28 +++++++++++++++
+ 10 files changed, 132 insertions(+), 7 deletions(-)
+ create mode 100755 go.sh
+
+diff --git a/go.sh b/go.sh
+new file mode 100755
+index 0000000..b6f4fc9
+--- /dev/null
++++ b/go.sh
+@@ -0,0 +1,43 @@
++#!/usr/bin/env bash
++# One-command Teleopit session launcher (2026-08-14).
++#   bash ~/Teleopit/go.sh
++# Cleans stale processes/ports, starts sim2real, waits for ready.
++# The PicoBridge app connects BY ITSELF ~5 s after this prints READY.
++set -u
++cd "$(dirname "$0")"
++
++# GUARD (2026-08-14): never allow two commanders. If an onboard session is
++# running on the Orin, this laptop launcher must not start a second one —
++# the robot obeys whichever stream persists and no remote button can win.
++if ssh -o BatchMode=yes -o ConnectTimeout=4 unitree@192.168.123.164 \
++     'pgrep -f "miniforge3/envs/teleopi[t]/bin/python" >/dev/null' 2>/dev/null; then
++  echo "ABORT: an ONBOARD Teleopit session is running on the robot."
++  echo "Kill it first:  ssh unitree@192.168.123.164 'pkill -9 -f miniforge3/envs/teleopit'"
++  exit 1
++fi
++
++# free the receiver port: old teleopit processes + the XRoboToolkit PC service
++systemctl --user stop holosim-pcservice 2>/dev/null
++for p in $(pgrep -f "miniconda3/envs/teleopi[t]/bin/python"); do kill -9 "$p" 2>/dev/null; done
++sleep 2
++
++LOG=/tmp/session_monitor/sim2real.log
++mkdir -p /tmp/session_monitor
++setsid nohup "$HOME/miniconda3/envs/teleopit/bin/python" -u scripts/run/run_sim2real.py \
++    --config-name pico4_sim2real \
++    controller.policy_path=ckpt/track_g1.onnx \
++    real_robot.network_interface=enx000ec6c3d44a \
++    > "$LOG" 2>&1 < /dev/null &
++
++for i in $(seq 1 30); do
++  sleep 1
++  if grep -q "robot control ready" "$LOG" 2>/dev/null; then
++    echo "READY — mode IDLE. Headset app connects itself in ~5 s."
++    echo "Remote: Start=stand  Y=mocap  X=stand  B/PicoA=pause  L1+R1=DAMP(falls if untethered)"
++    exit 0
++  fi
++  if grep -qE "Error|Traceback" "$LOG" 2>/dev/null; then
++    echo "FAILED — last log lines:"; tail -5 "$LOG"; exit 1
++  fi
++done
++echo "TIMEOUT waiting for ready — tail $LOG"; exit 1
+diff --git a/teleopit/configs/input/pico4.yaml b/teleopit/configs/input/pico4.yaml
+index 2861f95..dd75ed8 100644
+--- a/teleopit/configs/input/pico4.yaml
++++ b/teleopit/configs/input/pico4.yaml
+@@ -1,7 +1,7 @@
+ provider: pico4
+ human_format: pico_bridge
+ robot_name: unitree_g1
+-human_height: 1.75
++human_height: 1.74  # measured pilot height 2026-08-17 (was default 1.75)
+ pico4_timeout: 60.0   # seconds to wait for first pico-bridge body frame
+ pico4_buffer_size: 60
+ pico4_timestamp_gap_reset_s: 0.15
+diff --git a/teleopit/configs/pico4_sim.yaml b/teleopit/configs/pico4_sim.yaml
+index 9abf824..50579ff 100644
+--- a/teleopit/configs/pico4_sim.yaml
++++ b/teleopit/configs/pico4_sim.yaml
+@@ -15,8 +15,13 @@ retarget_buffer_enabled: true
+ retarget_buffer_window_s: 0.5
+ retarget_buffer_delay_s: null  # null = auto use one input-frame delay for timeline sampling
+ realtime_buffer_warmup_steps: 2
+-reference_velocity_smoothing_alpha: 0.35
+-reference_anchor_velocity_smoothing_alpha: 0.25
++# 2026-08-17 audit RC2/RC6: alphas raised 0.35/0.25 -> 0.6/0.5 (sim-verified:
++# NO FALL, RMS 0.1145 = alpha-1.0 baseline, lag 40->20ms) with jitter handled
++# by the new deadbands instead of heavy smoothing.
++reference_velocity_smoothing_alpha: 0.6
++reference_anchor_velocity_smoothing_alpha: 0.5
++anchor_lin_vel_deadband: 0.08   # m/s, zeroes standing-still tracker jitter
++anchor_ang_vel_deadband: 0.12  # rad/s, yaw component only
+ reference_steps: [0]
+ reference_debug_log: false
+ arm_mocap:
+diff --git a/teleopit/configs/pico4_sim2real.yaml b/teleopit/configs/pico4_sim2real.yaml
+index 3887185..4238c63 100644
+--- a/teleopit/configs/pico4_sim2real.yaml
++++ b/teleopit/configs/pico4_sim2real.yaml
+@@ -13,8 +13,13 @@ retarget_buffer_enabled: true
+ retarget_buffer_window_s: 0.5
+ retarget_buffer_delay_s: null  # null = auto use one input-frame delay for timeline sampling
+ realtime_buffer_warmup_steps: 2
+-reference_velocity_smoothing_alpha: 0.35
+-reference_anchor_velocity_smoothing_alpha: 0.25
++# 2026-08-17 audit RC2/RC6: alphas raised 0.35/0.25 -> 0.6/0.5 (sim-verified:
++# NO FALL, RMS 0.1145 = alpha-1.0 baseline, lag 40->20ms) with jitter handled
++# by the new deadbands instead of heavy smoothing.
++reference_velocity_smoothing_alpha: 0.6
++reference_anchor_velocity_smoothing_alpha: 0.5
++anchor_lin_vel_deadband: 0.08   # m/s, zeroes standing-still tracker jitter
++anchor_ang_vel_deadband: 0.12  # rad/s, yaw component only
+ reference_steps: [0]
+ reference_debug_log: false
+ 
+diff --git a/teleopit/configs/robot/g1.yaml b/teleopit/configs/robot/g1.yaml
+index 4553fd7..1571dc5 100644
+--- a/teleopit/configs/robot/g1.yaml
++++ b/teleopit/configs/robot/g1.yaml
+@@ -24,6 +24,11 @@ default_angles: [-0.312, 0, 0, 0.669, -0.363, 0,
+                  0.2, 0.2, 0, 0.6, 0, 0, 0,
+                  0.2, -0.2, 0, 0.6, 0, 0, 0]
+ 
++# 2026-08-17: waist_pitch action_scale RESTORED to 0.4386. Root cause of the
++# "jam" was the G1 waist LOCK (mobile-app config + physical fastener screws
++# left by previous devs), now removed/unlocked by the operator. The 08-14
++# freeze (0.0) is the rollback value if the waist ever stalls again
++# (watch waist_pitch tau/temp on the first sessions).
+ action_scale: [0.5475, 0.3507, 0.5475, 0.3507, 0.4386, 0.4386,
+                0.5475, 0.3507, 0.5475, 0.3507, 0.4386, 0.4386,
+                0.5475, 0.4386, 0.4386,
+diff --git a/teleopit/runtime/reference_config.py b/teleopit/runtime/reference_config.py
+index cf0e7ab..d49c835 100644
+--- a/teleopit/runtime/reference_config.py
++++ b/teleopit/runtime/reference_config.py
+@@ -25,6 +25,12 @@ class ReferenceConfig:
+     realtime_buffer_warmup_steps: int
+     reference_velocity_smoothing_alpha: float
+     reference_anchor_velocity_smoothing_alpha: float
++    # Deadbands applied to finite-diff anchor velocities BEFORE smoothing.
++    # 0.0 (default) = disabled, identical to pre-2026-08-17 behavior.
++    # Purpose: tracker jitter on a standing pilot otherwise reaches the policy
++    # as small nonzero root velocity and draws corrective steps (audit RC6).
++    anchor_lin_vel_deadband: float
++    anchor_ang_vel_deadband: float
+ 
+ 
+ def _resolve_delay(cfg: Any, *, provider_fps: float | None) -> float | None:
+@@ -81,6 +87,11 @@ def parse_reference_config(
+         default=1.0,
+     )
+ 
++    lin_deadband = float(cfg_get(cfg, "anchor_lin_vel_deadband", 0.0))
++    ang_deadband = float(cfg_get(cfg, "anchor_ang_vel_deadband", 0.0))
++    if lin_deadband < 0.0 or ang_deadband < 0.0:
++        raise ValueError("anchor velocity deadbands must be >= 0")
++
+     return ReferenceConfig(
+         retarget_buffer_enabled=retarget_buffer_enabled,
+         retarget_buffer_window_s=retarget_buffer_window_s,
+@@ -89,4 +100,6 @@ def parse_reference_config(
+         realtime_buffer_warmup_steps=warmup,
+         reference_velocity_smoothing_alpha=vel_alpha,
+         reference_anchor_velocity_smoothing_alpha=anchor_vel_alpha,
++        anchor_lin_vel_deadband=lin_deadband,
++        anchor_ang_vel_deadband=ang_deadband,
+     )
+diff --git a/teleopit/sim/loop.py b/teleopit/sim/loop.py
+index 5f1a211..89bc10f 100644
+--- a/teleopit/sim/loop.py
++++ b/teleopit/sim/loop.py
+@@ -130,6 +130,8 @@ class SimulationLoop:
+             default_dof_pos=self._default_dof_pos,
+             reference_velocity_smoothing_alpha=self._ref_cfg.reference_velocity_smoothing_alpha,
+             reference_anchor_velocity_smoothing_alpha=self._ref_cfg.reference_anchor_velocity_smoothing_alpha,
++            anchor_lin_vel_deadband=self._ref_cfg.anchor_lin_vel_deadband,
++            anchor_ang_vel_deadband=self._ref_cfg.anchor_ang_vel_deadband,
+         )
+         self._publisher = RuntimePublisher(self.bus)
+         self._viewer_manager = ViewerManager(
+diff --git a/teleopit/sim/runtime_components.py b/teleopit/sim/runtime_components.py
+index ae45081..713e147 100644
+--- a/teleopit/sim/runtime_components.py
++++ b/teleopit/sim/runtime_components.py
+@@ -70,6 +70,8 @@ class PolicyStepRunner:
+         default_dof_pos: Float32Array,
+         reference_velocity_smoothing_alpha: float = 1.0,
+         reference_anchor_velocity_smoothing_alpha: float = 1.0,
++        anchor_lin_vel_deadband: float = 0.0,
++        anchor_ang_vel_deadband: float = 0.0,
+     ) -> None:
+         self.robot = robot
+         self.controller = controller
+@@ -84,6 +86,9 @@ class PolicyStepRunner:
+         self._motion_joint_vel_smoother = ExponentialVecSmoother(reference_velocity_smoothing_alpha)
+         self._motion_anchor_lin_vel_smoother = ExponentialVecSmoother(reference_anchor_velocity_smoothing_alpha)
+         self._motion_anchor_ang_vel_smoother = ExponentialVecSmoother(reference_anchor_velocity_smoothing_alpha)
++        # Deadbands mirror Sim2RealReferenceProcessor (audit RC6); 0.0 = off.
++        self._anchor_lin_vel_deadband = float(anchor_lin_vel_deadband)
++        self._anchor_ang_vel_deadband = float(anchor_ang_vel_deadband)
+         self.last_action: Float32Array = np.zeros((self.num_actions,), dtype=np.float32)
+         self.last_retarget_qpos: Float64Array | None = None
+         self.last_reference_qpos: Float64Array | None = None
+@@ -170,8 +175,17 @@ class PolicyStepRunner:
+             motion_anchor_ang_vel_w = None
+         else:
+             raw_motion_anchor_lin_vel_w, raw_motion_anchor_ang_vel_w = self._compute_anchor_velocities(reference_qpos)
+-            motion_anchor_lin_vel_w = self._motion_anchor_lin_vel_smoother.apply(raw_motion_anchor_lin_vel_w)
+-            motion_anchor_ang_vel_w = self._motion_anchor_ang_vel_smoother.apply(raw_motion_anchor_ang_vel_w)
++            lin_in = raw_motion_anchor_lin_vel_w
++            ang_in = raw_motion_anchor_ang_vel_w
++            if self._anchor_lin_vel_deadband > 0.0:
++                lin_in = np.where(
++                    np.abs(lin_in) < self._anchor_lin_vel_deadband, 0.0, lin_in
++                ).astype(np.float32)
++            if self._anchor_ang_vel_deadband > 0.0 and abs(float(ang_in[2])) < self._anchor_ang_vel_deadband:
++                ang_in = ang_in.copy()
++                ang_in[2] = 0.0
++            motion_anchor_lin_vel_w = self._motion_anchor_lin_vel_smoother.apply(lin_in)
++            motion_anchor_ang_vel_w = self._motion_anchor_ang_vel_smoother.apply(ang_in)
+ 
+         return MotionPreparation(
+             qpos=qpos,
+diff --git a/teleopit/sim2real/mp/runtime.py b/teleopit/sim2real/mp/runtime.py
+index ead22db..da75b32 100644
+--- a/teleopit/sim2real/mp/runtime.py
++++ b/teleopit/sim2real/mp/runtime.py
+@@ -1243,6 +1243,8 @@ class _RobotControlWorker:
+             num_actions=self.num_actions,
+             reference_velocity_smoothing_alpha=self._ref_cfg.reference_velocity_smoothing_alpha,
+             reference_anchor_velocity_smoothing_alpha=self._ref_cfg.reference_anchor_velocity_smoothing_alpha,
++            anchor_lin_vel_deadband=self._ref_cfg.anchor_lin_vel_deadband,
++            anchor_ang_vel_deadband=self._ref_cfg.anchor_ang_vel_deadband,
+         )
+ 
+         self._standing_qpos = np.zeros(FULL_QPOS_DIM, dtype=np.float64)
+@@ -2014,6 +2016,14 @@ class _RobotControlWorker:
+             )
+             return
+ 
++        # Stale-resume reset (audit 2026-08-17 RC3): if we were holding, the
++        # incoming frame is the first fresh one after a gap. Restart finite-diff
++        # velocities from zero instead of differencing across the entire gap.
++        if self._last_mocap_hold_reason is not None:
++            self._ref_proc.reset_velocity_state()
++            self._last_retarget_qpos = None
++            self._last_mocap_hold_reason = None
++
+         robot_state = self.robot.get_state()
+         self._execute_mocap_pipeline(reference.qpos, robot_state, reference.reference_window)
+ 
+diff --git a/teleopit/sim2real/reference_processor.py b/teleopit/sim2real/reference_processor.py
+index 315ba79..c4fadaa 100644
+--- a/teleopit/sim2real/reference_processor.py
++++ b/teleopit/sim2real/reference_processor.py
+@@ -35,6 +35,8 @@ class Sim2RealReferenceProcessor:
+         num_actions: int,
+         reference_velocity_smoothing_alpha: float,
+         reference_anchor_velocity_smoothing_alpha: float,
++        anchor_lin_vel_deadband: float = 0.0,
++        anchor_ang_vel_deadband: float = 0.0,
+     ) -> None:
+         self._obs_builder = obs_builder
+         self._policy = policy
+@@ -47,6 +49,12 @@ class Sim2RealReferenceProcessor:
+         self._fixed_reference_xy_offset_w: Float32Array | None = None
+         self._reference_alignment_target_xy_w: Float32Array | None = None
+ 
++        # Deadbands (0.0 = disabled): applied to finite-diff anchor velocities
++        # before smoothing so standing-still tracker jitter reads as zero
++        # root velocity instead of a small wander the policy chases (RC6).
++        self._anchor_lin_vel_deadband = float(anchor_lin_vel_deadband)
++        self._anchor_ang_vel_deadband = float(anchor_ang_vel_deadband)
++
+         # Smoothers
+         self._motion_joint_vel_smoother = ExponentialVecSmoother(reference_velocity_smoothing_alpha)
+         self._motion_anchor_lin_vel_smoother = ExponentialVecSmoother(reference_anchor_velocity_smoothing_alpha)
+@@ -138,6 +146,19 @@ class Sim2RealReferenceProcessor:
+             else np.asarray(target_qpos[0:2], dtype=np.float32).reshape(2).copy()
+         )
+ 
++    def reset_velocity_state(self) -> None:
++        """Restart finite-diff velocities from zero.
++
++        Call on the first fresh reference after any hold (stale/invalid/missing
++        frames). Without this, the first fresh frame finite-differences the
++        entire missed motion at policy rate into a single-step velocity spike
++        (measured 3.5-14 rad/s), which the policy executes. Audit 2026-08-17 RC3.
++        """
++        self._last_reference_qpos = None
++        self._motion_joint_vel_smoother.reset()
++        self._motion_anchor_lin_vel_smoother.reset()
++        self._motion_anchor_ang_vel_smoother.reset()
++
+     # ------------------------------------------------------------------
+     # Anchor velocity computation
+     # ------------------------------------------------------------------
+@@ -199,6 +220,13 @@ class Sim2RealReferenceProcessor:
+     def apply_anchor_vel_smoothing(
+         self, lin: Float32Array, ang: Float32Array,
+     ) -> tuple[Float32Array, Float32Array]:
++        if self._anchor_lin_vel_deadband > 0.0:
++            lin = np.where(
++                np.abs(lin) < self._anchor_lin_vel_deadband, 0.0, lin
++            ).astype(np.float32)
++        if self._anchor_ang_vel_deadband > 0.0 and abs(float(ang[2])) < self._anchor_ang_vel_deadband:
++            ang = ang.copy()
++            ang[2] = 0.0
+         return (
+             self._motion_anchor_lin_vel_smoother.apply(lin),
+             self._motion_anchor_ang_vel_smoother.apply(ang),
+-- 
+2.34.1
+

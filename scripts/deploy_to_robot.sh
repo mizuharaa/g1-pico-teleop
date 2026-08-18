@@ -37,6 +37,10 @@ scp "$D/HoloMotion/deployment/unitree_g1_ros2_29dof/src/humanoid_policy/local_re
     "$R":~/humanoid_policy_patched/
 scp "$D/HoloMotion/deployment/unitree_g1_ros2_29dof/launch_profiles/orin_docker.yaml" \
     "$R":~/humanoid_policy_patched/orin_docker.yaml
+# P1 (2026-08-14): limit_scales 1.0 config — QA found this was never shipped;
+# without it a redeploy silently restores the stock 2.0 (double joint range).
+scp "$D/HoloMotion/deployment/unitree_g1_ros2_29dof/src/config/g1_29dof_holomotion.yaml" \
+    "$R":~/humanoid_policy_patched/g1_29dof_holomotion.yaml
 
 echo "== 2/4 run installer on the Orin (docker load + patch overlay + gate check) =="
 ssh -t "$R" "bash ~/robot_install.sh"

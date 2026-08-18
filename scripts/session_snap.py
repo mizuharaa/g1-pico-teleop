@@ -12,7 +12,9 @@ import time
 import cv2
 import numpy as np
 
-CAMS = [("/dev/video4", "EXTERNAL")]   # RealSense D435i RGB on the laptop
+CAMS = [("/dev/video6", "EXTERNAL")]   # RealSense D435i RGB on the laptop
+# 2026-08-14: video4 is the RealSense DEPTH node (near-black frames);
+# the RGB stream enumerates at video6 on this laptop.
 H = 480
 
 

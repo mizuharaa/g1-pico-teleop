@@ -1,0 +1,33 @@
+From dce49339747ce239e54526fe550962215254970c Mon Sep 17 00:00:00 2001
+From: alois <luong.alois@gmail.com>
+Date: Mon, 17 Aug 2026 15:48:45 +0700
+Subject: [PATCH 05/11] Joystick toggle enterable from MOCAP/ARMS via standing
+ transition
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ teleopit/sim2real/mp/runtime.py | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/teleopit/sim2real/mp/runtime.py b/teleopit/sim2real/mp/runtime.py
+index fecfbc5..75dae13 100644
+--- a/teleopit/sim2real/mp/runtime.py
++++ b/teleopit/sim2real/mp/runtime.py
+@@ -2001,8 +2001,12 @@ class _RobotControlWorker:
+             operator_logger.info("joystick -> STANDING")
+             self._enter_standing()
+             return
+-        if self.mode != RobotMode.STANDING:
+-            operator_logger.info("JOYSTICK mode is only enterable from STANDING (current: %s)", self.mode.value)
++        if self.mode in (RobotMode.MOCAP, RobotMode.ARMS):
++            # route through the proven mocap->standing transition, then enter
++            operator_logger.info("mocap -> STANDING -> JOYSTICK")
++            self._enter_standing()
++        elif self.mode != RobotMode.STANDING:
++            operator_logger.info("JOYSTICK mode is only enterable from STANDING/MOCAP (current: %s)", self.mode.value)
+             return
+         self._joy_qpos = self._standing_qpos.copy()
+         self._joy_yaw = 0.0
+-- 
+2.34.1
+

@@ -1,0 +1,245 @@
+From 46e5cc4914cbb8ee6b56b092af1c9d37752b6c2d Mon Sep 17 00:00:00 2001
+From: alois <luong.alois@gmail.com>
+Date: Mon, 17 Aug 2026 15:09:14 +0700
+Subject: [PATCH 04/11] JOYSTICK walking mode: right-stick-click toggle from
+ STANDING, left stick walk/strafe, right stick turn, X exits; velocity-command
+ reference synthesis at 50Hz with caps and deadzone
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ teleopit/configs/pico4_sim2real.yaml |  8 +++
+ teleopit/inputs/pico4_provider.py    | 21 +++++++
+ teleopit/inputs/realtime_packet.py   |  2 +
+ teleopit/sim2real/mp/runtime.py      | 91 ++++++++++++++++++++++++++++
+ 4 files changed, 122 insertions(+)
+
+diff --git a/teleopit/configs/pico4_sim2real.yaml b/teleopit/configs/pico4_sim2real.yaml
+index 2417fa8..70e364f 100644
+--- a/teleopit/configs/pico4_sim2real.yaml
++++ b/teleopit/configs/pico4_sim2real.yaml
+@@ -167,3 +167,11 @@ mocap_switch:
+ hydra:
+   run:
+     dir: .
++
++# Joystick walking mode (2026-08-17): press RIGHT STICK CLICK to toggle from
++# STANDING. Left stick = walk/strafe, right stick X = turn. X exits to STANDING.
++joystick:
++  vx_max: 0.5      # m/s forward/back cap
++  vy_max: 0.3      # m/s strafe cap
++  wz_max: 0.8      # rad/s turn cap
++  stick_deadzone: 0.12
+diff --git a/teleopit/inputs/pico4_provider.py b/teleopit/inputs/pico4_provider.py
+index 52b184f..84b3248 100644
+--- a/teleopit/inputs/pico4_provider.py
++++ b/teleopit/inputs/pico4_provider.py
+@@ -63,6 +63,8 @@ class PicoControllerState:
+     grip: float
+     trigger: float
+     present: bool = True
++    axis_x: float = 0.0
++    axis_y: float = 0.0
+ 
+ 
+ @dataclass(frozen=True)
+@@ -222,6 +224,8 @@ class Pico4InputProvider(RealtimeInputProvider):
+         pause_debounce_s: float = 0.25,
+         arms_button: str | None = "B",
+         arms_debounce_s: float | None = None,
++        joystick_button: str | None = "right_axis_click",
++        joystick_debounce_s: float | None = None,
+         bridge_host: str = "0.0.0.0",
+         bridge_port: int = 63901,
+         bridge_discovery: bool = True,
+@@ -263,14 +267,19 @@ class Pico4InputProvider(RealtimeInputProvider):
+         self._pending_control_events: deque[ControlEvent] = deque()
+         self._pause_button = None if pause_button in (None, "", "null") else str(pause_button)
+         self._arms_button = None if arms_button in (None, "", "null") else str(arms_button)
++        self._joystick_button = None if joystick_button in (None, "", "null") else str(joystick_button)
+         self._pause_debounce_s = max(float(pause_debounce_s), 0.0)
+         self._arms_debounce_s = self._pause_debounce_s if arms_debounce_s is None else max(float(arms_debounce_s), 0.0)
++        self._joystick_debounce_s = self._pause_debounce_s if joystick_debounce_s is None else max(float(joystick_debounce_s), 0.0)
+         self._pause_button_path = self._resolve_button_path(self._pause_button)
+         self._arms_button_path = self._resolve_button_path(self._arms_button)
++        self._joystick_button_path = self._resolve_button_path(self._joystick_button)
+         self._last_pause_button_pressed = False
+         self._last_arms_button_pressed = False
++        self._last_joystick_button_pressed = False
+         self._last_pause_toggle_timestamp: float | None = None
+         self._last_arms_toggle_timestamp: float | None = None
++        self._last_joystick_toggle_timestamp: float | None = None
+         self._last_raw_body_joints: NDArray[np.float64] | None = None
+         self._last_frame_timestamp: float | None = None
+         self._last_source_seq: int | None = None
+@@ -561,6 +570,16 @@ class Pico4InputProvider(RealtimeInputProvider):
+             last_toggle_attr="_last_arms_toggle_timestamp",
+             debounce_s=self._arms_debounce_s,
+         ) or emitted
++        emitted = self._poll_button_control_event(
++            frame,
++            timestamp=timestamp,
++            button_path=self._joystick_button_path,
++            button_label=self._joystick_button,
++            event_type=ControlEventType.TOGGLE_JOYSTICK,
++            last_pressed_attr="_last_joystick_button_pressed",
++            last_toggle_attr="_last_joystick_toggle_timestamp",
++            debounce_s=self._joystick_debounce_s,
++        ) or emitted
+         return emitted
+ 
+     def _poll_button_control_event(
+@@ -616,6 +635,8 @@ class Pico4InputProvider(RealtimeInputProvider):
+             grip=float(axis.get("grip", 0.0)),
+             trigger=float(axis.get("trigger", 0.0)),
+             present=controller is not None,
++            axis_x=float(axis.get("x", 0.0)),
++            axis_y=float(axis.get("y", 0.0)),
+         )
+ 
+     @staticmethod
+diff --git a/teleopit/inputs/realtime_packet.py b/teleopit/inputs/realtime_packet.py
+index 5299fe0..9bb5439 100644
+--- a/teleopit/inputs/realtime_packet.py
++++ b/teleopit/inputs/realtime_packet.py
+@@ -17,6 +17,8 @@ HumanFrame = Dict[str, Tuple[NDArray[np.float64], NDArray[np.float64]]]
+ class ControlEventType(str, Enum):
+     TOGGLE_PAUSE = "toggle_pause"
+     TOGGLE_ARMS = "toggle_arms"
++    # 2026-08-17: stick-driven walking mode (velocity-command reference)
++    TOGGLE_JOYSTICK = "toggle_joystick"
+ 
+ 
+ @dataclass(frozen=True)
+diff --git a/teleopit/sim2real/mp/runtime.py b/teleopit/sim2real/mp/runtime.py
+index 40bfdec..fecfbc5 100644
+--- a/teleopit/sim2real/mp/runtime.py
++++ b/teleopit/sim2real/mp/runtime.py
+@@ -146,6 +146,7 @@ class RobotMode(Enum):
+     STANDING = "standing"
+     MOCAP = "mocap"
+     ARMS = "arms"
++    JOYSTICK = "joystick"
+     POLICY = "policy"
+     DAMPING = "damping"
+ 
+@@ -1331,6 +1332,16 @@ class _RobotControlWorker:
+             else LatestSubscriber(endpoints.control_events_pub, CONTROL_EVENTS_TOPIC)
+         )
+         self._command_sub = LatestSubscriber(endpoints.command_pub, COMMAND_TOPIC)
++        # Joystick walking mode (2026-08-17): stick axes from the pico input worker
++        self._controller_axes_sub = LatestSubscriber(endpoints.controller_pub, CONTROLLER_TOPIC)
++        joy_cfg = cfg_get(cfg, "joystick", {}) or {}
++        self._joy_vx_max = float(cfg_get(joy_cfg, "vx_max", 0.5))
++        self._joy_vy_max = float(cfg_get(joy_cfg, "vy_max", 0.3))
++        self._joy_wz_max = float(cfg_get(joy_cfg, "wz_max", 0.8))
++        self._joy_stick_deadzone = float(cfg_get(joy_cfg, "stick_deadzone", 0.12))
++        self._joy_qpos = self._standing_qpos.copy() if hasattr(self, "_standing_qpos") else None
++        self._joy_yaw = 0.0
++        self._joy_controller_snapshot = None
+         self._reference_command_pub = (
+             None
+             if self.high_level_policy_enabled
+@@ -1403,6 +1414,8 @@ class _RobotControlWorker:
+                         self._standing_step()
+                     elif self.mode in (RobotMode.MOCAP, RobotMode.ARMS):
+                         self._mocap_step()
++                    elif self.mode == RobotMode.JOYSTICK:
++                        self._joystick_step()
+                     elif self.mode == RobotMode.POLICY:
+                         self._high_level_policy_step()
+ 
+@@ -1983,6 +1996,81 @@ class _RobotControlWorker:
+             )
+             self._enter_standing()
+ 
++    def _toggle_joystick_mode(self) -> None:
++        if self.mode == RobotMode.JOYSTICK:
++            operator_logger.info("joystick -> STANDING")
++            self._enter_standing()
++            return
++        if self.mode != RobotMode.STANDING:
++            operator_logger.info("JOYSTICK mode is only enterable from STANDING (current: %s)", self.mode.value)
++            return
++        self._joy_qpos = self._standing_qpos.copy()
++        self._joy_yaw = 0.0
++        self._joy_controller_snapshot = None
++        self._ref_proc.reset_velocity_state()
++        self._ref_proc.reset_alignment()
++        self.mode = RobotMode.JOYSTICK
++        operator_logger.info("mode -> JOYSTICK (sticks: left=walk/strafe right=turn; X or stick-click exits)")
++
++    def _joystick_step(self) -> None:
++        if self.remote.X.on_pressed:
++            operator_logger.info("X -> STANDING (exit joystick)")
++            self._enter_standing()
++            return
++        pkt = self._controller_axes_sub.recv_latest()
++        if isinstance(pkt, SnapshotPacket):
++            self._joy_controller_snapshot = pkt.snapshot
++        vx = vy = wz = 0.0
++        snap = self._joy_controller_snapshot
++        if snap is not None:
++            lx = float(getattr(snap.left, "axis_x", 0.0))
++            ly = float(getattr(snap.left, "axis_y", 0.0))
++            rx = float(getattr(snap.right, "axis_x", 0.0))
++            dzn = self._joy_stick_deadzone
++
++            def _dz(v: float) -> float:
++                if abs(v) < dzn:
++                    return 0.0
++                return (v - np.sign(v) * dzn) / (1.0 - dzn)
++
++            vx = _dz(ly) * self._joy_vx_max
++            vy = -_dz(lx) * self._joy_vy_max
++            wz = -_dz(rx) * self._joy_wz_max
++        dt = self.dt
++        ca = float(np.cos(self._joy_yaw))
++        sa = float(np.sin(self._joy_yaw))
++        vw = np.array([ca * vx - sa * vy, sa * vx + ca * vy, 0.0], dtype=np.float32)
++        self._joy_qpos[0] += float(vw[0]) * dt
++        self._joy_qpos[1] += float(vw[1]) * dt
++        self._joy_yaw += wz * dt
++        half = self._joy_yaw / 2.0
++        self._joy_qpos[3] = float(np.cos(half))
++        self._joy_qpos[4] = 0.0
++        self._joy_qpos[5] = 0.0
++        self._joy_qpos[6] = float(np.sin(half))
++
++        robot_state = self.robot.get_state()
++        qpos = self._joy_qpos.copy()
++        motion_joint_vel = np.zeros(self.num_actions, dtype=np.float32)
++        motion_qpos = np.asarray(qpos[:7 + self.num_actions], dtype=np.float32)
++        reference_window = None
++        if obs_builder_requires_reference_window(self.obs_builder):
++            reference_window = build_static_reference_window(qpos, self._reference_window_builder, self.policy_hz)
++        obs = self._ref_proc.build_observation(
++            robot_state=robot_state,
++            motion_qpos=motion_qpos,
++            motion_joint_vel=motion_joint_vel,
++            last_action=self._last_action,
++            anchor_lin_vel_w=vw,
++            anchor_ang_vel_w=np.array([0.0, 0.0, wz], dtype=np.float32),
++            reference_window=reference_window,
++        )
++        obs = self._ref_proc.validate_observation(obs)
++        action = self.policy.compute_action(obs)
++        target_dof_pos = self._safety.clip_to_joint_limits(self.policy.get_target_dof_pos(action))
++        self._safety.send_positions(target_dof_pos)
++        self._last_action = np.asarray(action, dtype=np.float32).reshape(-1)
++
+     def _standing_step(self) -> None:
+         robot_state = self.robot.get_state()
+         qpos = self._standing_qpos.copy()
+@@ -2403,6 +2491,9 @@ class _RobotControlWorker:
+ 
+     def _handle_mocap_control_events(self, control_events: tuple[ControlEvent, ...]) -> None:
+         for event in control_events:
++            if event.event_type == ControlEventType.TOGGLE_JOYSTICK:
++                self._toggle_joystick_mode()
++                continue
+             if event.event_type == ControlEventType.TOGGLE_ARMS:
+                 self._toggle_arms_mode()
+                 continue
+-- 
+2.34.1
+

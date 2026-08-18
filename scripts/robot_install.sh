@@ -100,6 +100,23 @@ if [ -d ~/holoretarget_patched ]; then
     (docker rm "$CID" >/dev/null 2>&1 || sudo docker rm "$CID" >/dev/null)
     exit 1
   fi
+  # P1 (2026-08-14): limit_scales 1.0 joint-limit config. TWO copies exist in
+  # the image (src/config + install/share); the binary reads the install/share
+  # one. Patch BOTH. Runtime proof after container start: main_node must log
+  # "Joint limit scales - Position: 1.000000" — if it logs 2.0, the wrong
+  # copy was patched (same class of trap as the extensionless entry copy).
+  if [ -f ~/humanoid_policy_patched/g1_29dof_holomotion.yaml ]; then
+    for p in \
+      /opt/holomotion/deployment/unitree_g1_ros2_29dof/src/config/g1_29dof_holomotion.yaml \
+      /opt/holomotion/deployment/unitree_g1_ros2_29dof/install/humanoid_control/share/humanoid_control/config/g1_29dof_holomotion.yaml; do
+      (docker cp ~/humanoid_policy_patched/g1_29dof_holomotion.yaml "$CID":"$p" 2>/dev/null || \
+       sudo docker cp ~/humanoid_policy_patched/g1_29dof_holomotion.yaml "$CID":"$p")
+      echo "  patched $p"
+    done
+  else
+    echo "WARN: g1_29dof_holomotion.yaml missing from ~/humanoid_policy_patched —"
+    echo "      image keeps whatever limit_scales it already has (stock = 2.0!)"
+  fi
   # launch-profile config (max_data_age etc.) ships the same way
   if [ -f ~/humanoid_policy_patched/orin_docker.yaml ]; then
     (docker cp ~/humanoid_policy_patched/orin_docker.yaml \

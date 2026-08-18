@@ -1,0 +1,572 @@
+From 13fd4f813ec6dff80444e3a6f1e446f2d93ae44c Mon Sep 17 00:00:00 2001
+From: alois <luong.alois@gmail.com>
+Date: Mon, 17 Aug 2026 16:04:25 +0700
+Subject: [PATCH 07/11] Kick direction fix: knee position weight 0/10 -> 50 in
+ pico->G1 IK (forward kicks were reaching foot targets via hip abduction);
+ joystick caps raised vx 0.9 vy 0.55 wz 1.1
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ teleopit/configs/pico4_sim2real.yaml          |   6 +-
+ .../gmr/ik_configs/pico_bridge_to_g1.json     | 534 ++++++++++++++++--
+ 2 files changed, 482 insertions(+), 58 deletions(-)
+
+diff --git a/teleopit/configs/pico4_sim2real.yaml b/teleopit/configs/pico4_sim2real.yaml
+index 70e364f..8fab0ac 100644
+--- a/teleopit/configs/pico4_sim2real.yaml
++++ b/teleopit/configs/pico4_sim2real.yaml
+@@ -171,7 +171,7 @@ hydra:
+ # Joystick walking mode (2026-08-17): press RIGHT STICK CLICK to toggle from
+ # STANDING. Left stick = walk/strafe, right stick X = turn. X exits to STANDING.
+ joystick:
+-  vx_max: 0.5      # m/s forward/back cap
+-  vy_max: 0.3      # m/s strafe cap
+-  wz_max: 0.8      # rad/s turn cap
++  vx_max: 0.9      # m/s forward/back cap
++  vy_max: 0.55      # m/s strafe cap
++  wz_max: 1.1      # rad/s turn cap
+   stick_deadzone: 0.12
+diff --git a/teleopit/retargeting/gmr/ik_configs/pico_bridge_to_g1.json b/teleopit/retargeting/gmr/ik_configs/pico_bridge_to_g1.json
+index 7556875..952d579 100644
+--- a/teleopit/retargeting/gmr/ik_configs/pico_bridge_to_g1.json
++++ b/teleopit/retargeting/gmr/ik_configs/pico_bridge_to_g1.json
+@@ -1,56 +1,480 @@
+ {
+-    "robot_root_name": "pelvis",
+-    "human_root_name": "Pelvis",
+-    "ground_height": 0.0,
+-    "human_height_assumption": 1.8,
+-    "use_ik_match_table1": true,
+-    "use_ik_match_table2": true,
+-    "human_scale_table": {
+-        "Pelvis": 0.9,
+-        "Spine3": 0.9,
+-        "Left_Hip": 0.9,
+-        "Right_Hip": 0.9,
+-        "Left_Knee": 0.9,
+-        "Right_Knee": 0.9,
+-        "Left_Foot": 0.9,
+-        "Right_Foot": 0.9,
+-        "Left_Shoulder": 0.8,
+-        "Right_Shoulder": 0.8,
+-        "Left_Elbow": 0.8,
+-        "Right_Elbow": 0.8,
+-        "Left_Wrist": 0.8,
+-        "Right_Wrist": 0.8
+-    },
+-    "ik_match_table1": {
+-        "pelvis": ["Pelvis", 0, 10, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, -0.5]],
+-        "left_hip_yaw_link": ["Left_Hip", 0, 10, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, -0.5]],
+-        "left_knee_link": ["Left_Knee", 0, 10, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, -0.5]],
+-        "left_foot": ["Left_Foot", 100, 10, [-0.01, 0.0, -0.015], [-0.5, 0.5, -0.5, -0.5], "site"],
+-        "right_hip_yaw_link": ["Right_Hip", 0, 10, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, -0.5]],
+-        "right_knee_link": ["Right_Knee", 0, 10, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, -0.5]],
+-        "right_foot": ["Right_Foot", 100, 10, [-0.01, 0.0, -0.015], [-0.5, 0.5, -0.5, -0.5], "site"],
+-        "torso_link": ["Spine3", 0, 10, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, -0.5]],
+-        "left_shoulder_yaw_link": ["Left_Shoulder", 0, 10, [0.0, 0.0, 0.0], [0.7071067811865475, 0.0, 0.7071067811865475, 0.0]],
+-        "left_elbow_link": ["Left_Elbow", 0, 10, [0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]],
+-        "left_wrist_yaw_link": ["Left_Wrist", 0, 10, [0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]],
+-        "right_shoulder_yaw_link": ["Right_Shoulder", 0, 10, [0.0, 0.0, 0.0], [0.0, 0.7071067811865475, 0.0, -0.7071067811865475]],
+-        "right_elbow_link": ["Right_Elbow", 0, 10, [0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]],
+-        "right_wrist_yaw_link": ["Right_Wrist", 0, 10, [0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]
+-    },
+-    "ik_match_table2": {
+-        "pelvis": ["Pelvis", 10, 5, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, -0.5]],
+-        "left_hip_yaw_link": ["Left_Hip", 10, 5, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, -0.5]],
+-        "left_knee_link": ["Left_Knee", 10, 5, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, -0.5]],
+-        "left_foot": ["Left_Foot", 100, 10, [-0.01, 0.0, -0.015], [-0.5, 0.5, -0.5, -0.5], "site"],
+-        "right_hip_yaw_link": ["Right_Hip", 10, 5, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, -0.5]],
+-        "right_knee_link": ["Right_Knee", 10, 5, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, -0.5]],
+-        "right_foot": ["Right_Foot", 100, 10, [-0.01, 0.0, -0.015], [-0.5, 0.5, -0.5, -0.5], "site"],
+-        "torso_link": ["Spine3", 0, 10, [0.0, 0.0, 0.0], [-0.5, 0.5, -0.5, -0.5]],
+-        "left_shoulder_yaw_link": ["Left_Shoulder", 0, 10, [0.0, 0.0, 0.0], [0.7071067811865475, 0.0, 0.7071067811865475, 0.0]],
+-        "left_elbow_link": ["Left_Elbow", 0, 10, [0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]],
+-        "left_wrist_yaw_link": ["Left_Wrist", 0, 10, [0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]],
+-        "right_shoulder_yaw_link": ["Right_Shoulder", 0, 10, [0.0, 0.0, 0.0], [0.0, 0.7071067811865475, 0.0, -0.7071067811865475]],
+-        "right_elbow_link": ["Right_Elbow", 0, 10, [0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]],
+-        "right_wrist_yaw_link": ["Right_Wrist", 0, 10, [0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]
+-    }
+-}
++ "robot_root_name": "pelvis",
++ "human_root_name": "Pelvis",
++ "ground_height": 0.0,
++ "human_height_assumption": 1.8,
++ "use_ik_match_table1": true,
++ "use_ik_match_table2": true,
++ "human_scale_table": {
++  "Pelvis": 0.9,
++  "Spine3": 0.9,
++  "Left_Hip": 0.9,
++  "Right_Hip": 0.9,
++  "Left_Knee": 0.9,
++  "Right_Knee": 0.9,
++  "Left_Foot": 0.9,
++  "Right_Foot": 0.9,
++  "Left_Shoulder": 0.8,
++  "Right_Shoulder": 0.8,
++  "Left_Elbow": 0.8,
++  "Right_Elbow": 0.8,
++  "Left_Wrist": 0.8,
++  "Right_Wrist": 0.8
++ },
++ "ik_match_table1": {
++  "pelvis": [
++   "Pelvis",
++   0,
++   10,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    -0.5,
++    0.5,
++    -0.5,
++    -0.5
++   ]
++  ],
++  "left_hip_yaw_link": [
++   "Left_Hip",
++   0,
++   10,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    -0.5,
++    0.5,
++    -0.5,
++    -0.5
++   ]
++  ],
++  "left_knee_link": [
++   "Left_Knee",
++   50,
++   10,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    -0.5,
++    0.5,
++    -0.5,
++    -0.5
++   ]
++  ],
++  "left_foot": [
++   "Left_Foot",
++   100,
++   10,
++   [
++    -0.01,
++    0.0,
++    -0.015
++   ],
++   [
++    -0.5,
++    0.5,
++    -0.5,
++    -0.5
++   ],
++   "site"
++  ],
++  "right_hip_yaw_link": [
++   "Right_Hip",
++   0,
++   10,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    -0.5,
++    0.5,
++    -0.5,
++    -0.5
++   ]
++  ],
++  "right_knee_link": [
++   "Right_Knee",
++   50,
++   10,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    -0.5,
++    0.5,
++    -0.5,
++    -0.5
++   ]
++  ],
++  "right_foot": [
++   "Right_Foot",
++   100,
++   10,
++   [
++    -0.01,
++    0.0,
++    -0.015
++   ],
++   [
++    -0.5,
++    0.5,
++    -0.5,
++    -0.5
++   ],
++   "site"
++  ],
++  "torso_link": [
++   "Spine3",
++   0,
++   10,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    -0.5,
++    0.5,
++    -0.5,
++    -0.5
++   ]
++  ],
++  "left_shoulder_yaw_link": [
++   "Left_Shoulder",
++   0,
++   10,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    0.7071067811865475,
++    0.0,
++    0.7071067811865475,
++    0.0
++   ]
++  ],
++  "left_elbow_link": [
++   "Left_Elbow",
++   0,
++   10,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    0.0,
++    0.0,
++    1.0,
++    0.0
++   ]
++  ],
++  "left_wrist_yaw_link": [
++   "Left_Wrist",
++   0,
++   10,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    0.0,
++    0.0,
++    1.0,
++    0.0
++   ]
++  ],
++  "right_shoulder_yaw_link": [
++   "Right_Shoulder",
++   0,
++   10,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    0.0,
++    0.7071067811865475,
++    0.0,
++    -0.7071067811865475
++   ]
++  ],
++  "right_elbow_link": [
++   "Right_Elbow",
++   0,
++   10,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    0.0,
++    1.0,
++    0.0,
++    0.0
++   ]
++  ],
++  "right_wrist_yaw_link": [
++   "Right_Wrist",
++   0,
++   10,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    0.0,
++    1.0,
++    0.0,
++    0.0
++   ]
++  ]
++ },
++ "ik_match_table2": {
++  "pelvis": [
++   "Pelvis",
++   10,
++   5,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    -0.5,
++    0.5,
++    -0.5,
++    -0.5
++   ]
++  ],
++  "left_hip_yaw_link": [
++   "Left_Hip",
++   10,
++   5,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    -0.5,
++    0.5,
++    -0.5,
++    -0.5
++   ]
++  ],
++  "left_knee_link": [
++   "Left_Knee",
++   50,
++   5,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    -0.5,
++    0.5,
++    -0.5,
++    -0.5
++   ]
++  ],
++  "left_foot": [
++   "Left_Foot",
++   100,
++   10,
++   [
++    -0.01,
++    0.0,
++    -0.015
++   ],
++   [
++    -0.5,
++    0.5,
++    -0.5,
++    -0.5
++   ],
++   "site"
++  ],
++  "right_hip_yaw_link": [
++   "Right_Hip",
++   10,
++   5,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    -0.5,
++    0.5,
++    -0.5,
++    -0.5
++   ]
++  ],
++  "right_knee_link": [
++   "Right_Knee",
++   50,
++   5,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    -0.5,
++    0.5,
++    -0.5,
++    -0.5
++   ]
++  ],
++  "right_foot": [
++   "Right_Foot",
++   100,
++   10,
++   [
++    -0.01,
++    0.0,
++    -0.015
++   ],
++   [
++    -0.5,
++    0.5,
++    -0.5,
++    -0.5
++   ],
++   "site"
++  ],
++  "torso_link": [
++   "Spine3",
++   0,
++   10,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    -0.5,
++    0.5,
++    -0.5,
++    -0.5
++   ]
++  ],
++  "left_shoulder_yaw_link": [
++   "Left_Shoulder",
++   0,
++   10,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    0.7071067811865475,
++    0.0,
++    0.7071067811865475,
++    0.0
++   ]
++  ],
++  "left_elbow_link": [
++   "Left_Elbow",
++   0,
++   10,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    0.0,
++    0.0,
++    1.0,
++    0.0
++   ]
++  ],
++  "left_wrist_yaw_link": [
++   "Left_Wrist",
++   0,
++   10,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    0.0,
++    0.0,
++    1.0,
++    0.0
++   ]
++  ],
++  "right_shoulder_yaw_link": [
++   "Right_Shoulder",
++   0,
++   10,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    0.0,
++    0.7071067811865475,
++    0.0,
++    -0.7071067811865475
++   ]
++  ],
++  "right_elbow_link": [
++   "Right_Elbow",
++   0,
++   10,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    0.0,
++    1.0,
++    0.0,
++    0.0
++   ]
++  ],
++  "right_wrist_yaw_link": [
++   "Right_Wrist",
++   0,
++   10,
++   [
++    0.0,
++    0.0,
++    0.0
++   ],
++   [
++    0.0,
++    1.0,
++    0.0,
++    0.0
++   ]
++  ]
++ }
++}
+\ No newline at end of file
+-- 
+2.34.1
+

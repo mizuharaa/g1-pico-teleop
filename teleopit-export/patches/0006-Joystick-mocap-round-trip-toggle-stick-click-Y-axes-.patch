@@ -1,0 +1,65 @@
+From 6b174be9a2a91d2e870f3cdb8c7f144acbeae27d Mon Sep 17 00:00:00 2001
+From: alois <luong.alois@gmail.com>
+Date: Mon, 17 Aug 2026 15:55:56 +0700
+Subject: [PATCH 06/11] Joystick<->mocap round-trip toggle (stick-click + Y),
+ axes debug log
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ teleopit/sim2real/mp/runtime.py | 25 ++++++++++++++++++++++---
+ 1 file changed, 22 insertions(+), 3 deletions(-)
+
+diff --git a/teleopit/sim2real/mp/runtime.py b/teleopit/sim2real/mp/runtime.py
+index 75dae13..34e98b4 100644
+--- a/teleopit/sim2real/mp/runtime.py
++++ b/teleopit/sim2real/mp/runtime.py
+@@ -1998,10 +1998,17 @@ class _RobotControlWorker:
+ 
+     def _toggle_joystick_mode(self) -> None:
+         if self.mode == RobotMode.JOYSTICK:
+-            operator_logger.info("joystick -> STANDING")
+-            self._enter_standing()
++            if getattr(self, "_joy_entered_from_mocap", False):
++                # round-trip: return to MOCAP through the standing gate
++                operator_logger.info("joystick -> MOCAP (re-entry via standing gate)")
++                self._enter_standing()
++                self._mocap_entry_requested = True
++            else:
++                operator_logger.info("joystick -> STANDING")
++                self._enter_standing()
+             return
+-        if self.mode in (RobotMode.MOCAP, RobotMode.ARMS):
++        self._joy_entered_from_mocap = self.mode in (RobotMode.MOCAP, RobotMode.ARMS)
++        if self._joy_entered_from_mocap:
+             # route through the proven mocap->standing transition, then enter
+             operator_logger.info("mocap -> STANDING -> JOYSTICK")
+             self._enter_standing()
+@@ -2021,6 +2028,11 @@ class _RobotControlWorker:
+             operator_logger.info("X -> STANDING (exit joystick)")
+             self._enter_standing()
+             return
++        if self.remote.Y.on_pressed:
++            operator_logger.info("Y -> MOCAP (from joystick, via standing gate)")
++            self._enter_standing()
++            self._mocap_entry_requested = True
++            return
+         pkt = self._controller_axes_sub.recv_latest()
+         if isinstance(pkt, SnapshotPacket):
+             self._joy_controller_snapshot = pkt.snapshot
+@@ -2040,6 +2052,13 @@ class _RobotControlWorker:
+             vx = _dz(ly) * self._joy_vx_max
+             vy = -_dz(lx) * self._joy_vy_max
+             wz = -_dz(rx) * self._joy_wz_max
++            now_dbg = time.monotonic()
++            if now_dbg - getattr(self, "_joy_dbg_last_s", 0.0) > 2.0:
++                self._joy_dbg_last_s = now_dbg
++                operator_logger.info(
++                    "joystick axes L(%.2f,%.2f) R(%.2f) -> v(%.2f,%.2f) w(%.2f)",
++                    lx, ly, rx, vx, vy, wz,
++                )
+         dt = self.dt
+         ca = float(np.cos(self._joy_yaw))
+         sa = float(np.sin(self._joy_yaw))
+-- 
+2.34.1
+

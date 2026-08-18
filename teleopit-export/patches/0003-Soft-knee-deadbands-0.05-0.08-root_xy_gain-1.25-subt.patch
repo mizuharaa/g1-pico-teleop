@@ -1,0 +1,112 @@
+From ed81b2baf8b1537128de8425d8e3c5e1baf8e9e4 Mon Sep 17 00:00:00 2001
+From: alois <luong.alois@gmail.com>
+Date: Mon, 17 Aug 2026 15:03:39 +0700
+Subject: [PATCH 03/11] Soft-knee deadbands (0.05/0.08) + root_xy_gain 1.25:
+ subtle steps pass, jitter still dead, fiercer displacement
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+---
+ teleopit/configs/pico4_sim.yaml          |  6 +++---
+ teleopit/configs/pico4_sim2real.yaml     |  6 +++---
+ teleopit/sim/runtime_components.py       | 16 +++++++++++-----
+ teleopit/sim2real/reference_processor.py | 19 ++++++++++++++-----
+ 4 files changed, 31 insertions(+), 16 deletions(-)
+
+diff --git a/teleopit/configs/pico4_sim.yaml b/teleopit/configs/pico4_sim.yaml
+index d7ae223..a334f26 100644
+--- a/teleopit/configs/pico4_sim.yaml
++++ b/teleopit/configs/pico4_sim.yaml
+@@ -20,9 +20,9 @@ realtime_buffer_warmup_steps: 2
+ # by the new deadbands instead of heavy smoothing.
+ reference_velocity_smoothing_alpha: 0.6
+ reference_anchor_velocity_smoothing_alpha: 0.5
+-anchor_lin_vel_deadband: 0.08   # m/s, zeroes standing-still tracker jitter
+-anchor_ang_vel_deadband: 0.12  # rad/s, yaw component only
+-root_xy_gain: 1.143  # RC4: neutralize GMR 0.875 root under-scaling ("robot moves less than me")
++anchor_lin_vel_deadband: 0.05  # m/s soft-knee (rev2: was 0.08 hard — ate small steps)
++anchor_ang_vel_deadband: 0.08  # rad/s soft-knee, yaw only
++root_xy_gain: 1.25  # RC4 + "fiercer" request: overshoots pilot displacement ~9%
+ reference_steps: [0]
+ reference_debug_log: false
+ arm_mocap:
+diff --git a/teleopit/configs/pico4_sim2real.yaml b/teleopit/configs/pico4_sim2real.yaml
+index 1dfe949..2417fa8 100644
+--- a/teleopit/configs/pico4_sim2real.yaml
++++ b/teleopit/configs/pico4_sim2real.yaml
+@@ -18,9 +18,9 @@ realtime_buffer_warmup_steps: 2
+ # by the new deadbands instead of heavy smoothing.
+ reference_velocity_smoothing_alpha: 0.6
+ reference_anchor_velocity_smoothing_alpha: 0.5
+-anchor_lin_vel_deadband: 0.08   # m/s, zeroes standing-still tracker jitter
+-anchor_ang_vel_deadband: 0.12  # rad/s, yaw component only
+-root_xy_gain: 1.143  # RC4: neutralize GMR 0.875 root under-scaling ("robot moves less than me")
++anchor_lin_vel_deadband: 0.05  # m/s soft-knee (rev2: was 0.08 hard — ate small steps)
++anchor_ang_vel_deadband: 0.08  # rad/s soft-knee, yaw only
++root_xy_gain: 1.25  # RC4 + "fiercer" request: overshoots pilot displacement ~9%
+ reference_steps: [0]
+ reference_debug_log: false
+ 
+diff --git a/teleopit/sim/runtime_components.py b/teleopit/sim/runtime_components.py
+index 713e147..2c18b68 100644
+--- a/teleopit/sim/runtime_components.py
++++ b/teleopit/sim/runtime_components.py
+@@ -177,13 +177,19 @@ class PolicyStepRunner:
+             raw_motion_anchor_lin_vel_w, raw_motion_anchor_ang_vel_w = self._compute_anchor_velocities(reference_qpos)
+             lin_in = raw_motion_anchor_lin_vel_w
+             ang_in = raw_motion_anchor_ang_vel_w
++            # Soft-knee deadband — mirrors Sim2RealReferenceProcessor (rev2)
+             if self._anchor_lin_vel_deadband > 0.0:
+-                lin_in = np.where(
+-                    np.abs(lin_in) < self._anchor_lin_vel_deadband, 0.0, lin_in
+-                ).astype(np.float32)
+-            if self._anchor_ang_vel_deadband > 0.0 and abs(float(ang_in[2])) < self._anchor_ang_vel_deadband:
++                n = float(np.linalg.norm(lin_in))
++                if n < self._anchor_lin_vel_deadband:
++                    lin_in = np.zeros_like(lin_in)
++                else:
++                    lin_in = (lin_in * ((n - self._anchor_lin_vel_deadband) / n)).astype(np.float32)
++            if self._anchor_ang_vel_deadband > 0.0:
++                wz = float(ang_in[2])
+                 ang_in = ang_in.copy()
+-                ang_in[2] = 0.0
++                ang_in[2] = 0.0 if abs(wz) < self._anchor_ang_vel_deadband else (
++                    wz - np.sign(wz) * self._anchor_ang_vel_deadband
++                )
+             motion_anchor_lin_vel_w = self._motion_anchor_lin_vel_smoother.apply(lin_in)
+             motion_anchor_ang_vel_w = self._motion_anchor_ang_vel_smoother.apply(ang_in)
+ 
+diff --git a/teleopit/sim2real/reference_processor.py b/teleopit/sim2real/reference_processor.py
+index c4fadaa..19b6707 100644
+--- a/teleopit/sim2real/reference_processor.py
++++ b/teleopit/sim2real/reference_processor.py
+@@ -220,13 +220,22 @@ class Sim2RealReferenceProcessor:
+     def apply_anchor_vel_smoothing(
+         self, lin: Float32Array, ang: Float32Array,
+     ) -> tuple[Float32Array, Float32Array]:
++        # Soft-knee deadband (2026-08-17 rev2): subtract the threshold from the
++        # velocity NORM and rescale, instead of hard-zeroing components. Jitter
++        # below the knee still reads as zero, but subtle intentional motion
++        # passes through proportionally (hard zeroing ate small steps).
+         if self._anchor_lin_vel_deadband > 0.0:
+-            lin = np.where(
+-                np.abs(lin) < self._anchor_lin_vel_deadband, 0.0, lin
+-            ).astype(np.float32)
+-        if self._anchor_ang_vel_deadband > 0.0 and abs(float(ang[2])) < self._anchor_ang_vel_deadband:
++            n = float(np.linalg.norm(lin))
++            if n < self._anchor_lin_vel_deadband:
++                lin = np.zeros_like(lin)
++            else:
++                lin = (lin * ((n - self._anchor_lin_vel_deadband) / n)).astype(np.float32)
++        if self._anchor_ang_vel_deadband > 0.0:
++            wz = float(ang[2])
+             ang = ang.copy()
+-            ang[2] = 0.0
++            ang[2] = 0.0 if abs(wz) < self._anchor_ang_vel_deadband else (
++                wz - np.sign(wz) * self._anchor_ang_vel_deadband
++            )
+         return (
+             self._motion_anchor_lin_vel_smoother.apply(lin),
+             self._motion_anchor_ang_vel_smoother.apply(ang),
+-- 
+2.34.1
+

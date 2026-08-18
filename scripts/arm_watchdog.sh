@@ -9,7 +9,7 @@ IFACE=$(ip -4 -o addr | awk '/ 192\.168\.123\./ {print $2; exit}')
 [ -z "$IFACE" ] && { echo "no robot LAN — plug the cable"; exit 1; }
 setsid nohup "$PY" "$S/joint_watchdog.py" --iface "$IFACE" \
   --csv "/tmp/session_monitor/watchdog_$(date +%H%M%S).csv" \
-  --on-alarm "$PY $S/g1_estop.py --iface $IFACE --now" \
+  --on-alarm "echo ALERT-ONLY: operator decides; untethered auto-kill = collapse" \
   > /tmp/watchdog_teleop.log 2>&1 < /dev/null &
 disown
 sleep 4

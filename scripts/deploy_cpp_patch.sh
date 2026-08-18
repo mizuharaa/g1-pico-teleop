@@ -24,9 +24,14 @@ IMAGE=horizonrobotics/holomotion:v1.4.0-orin-jp5.1-arm64
 
 echo "== 1/4 ship patched sources =="
 ssh "$R" "mkdir -p ~/humanoid_policy_patched"
+# P5 (2026-08-14): motor_crc_hg.cpp carries the strict-aliasing CRC fix — the
+# root cause of the 3-for-3 rebuild failures. QA found it was never shipped:
+# rebuilding without it reproduces the CRC-dead binary (robot stuck in
+# ZERO_TORQUE). It MUST travel with main_node.cpp.
 scp "$SRC/src/humanoid_policy/policy_runtime.py" \
     "$SRC/src/humanoid_policy/local_retarget.py" \
     "$SRC/src/src/main_node.cpp" \
+    "$SRC/src/src/common/motor_crc_hg.cpp" \
     "$SRC/launch_profiles/orin_docker.yaml" \
     "$R":~/humanoid_policy_patched/
 
@@ -46,8 +51,11 @@ for f in ~/humanoid_policy_patched/policy_runtime.py ~/humanoid_policy_patched/l
   done
 done
 docker cp ~/humanoid_policy_patched/main_node.cpp holomotion_build:$WS/src/src/main_node.cpp
+# P5: CRC strict-aliasing fix — without this the -O2 rebuild is CRC-dead
+# (firmware rejects every LowCmd; robot never leaves ZERO_TORQUE)
+docker cp ~/humanoid_policy_patched/motor_crc_hg.cpp holomotion_build:$WS/src/src/common/motor_crc_hg.cpp
 docker cp ~/humanoid_policy_patched/orin_docker.yaml holomotion_build:$WS/launch_profiles/orin_docker.yaml
-echo "  patched src/src/main_node.cpp + orin_docker.yaml"
+echo "  patched src/src/main_node.cpp + common/motor_crc_hg.cpp + orin_docker.yaml"
 
 # models backup, targeted build (NO clean_workspace), verify, restore if eaten
 docker exec holomotion_build bash -c "
