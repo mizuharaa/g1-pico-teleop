@@ -188,11 +188,15 @@ advertised host shares a /24 with the headset. The relay just rebroadcasts
 2. **Install PicoBridge.** USB-C to the laptop, accept the debugging prompt in
    the headset, then:
    ```bash
+   curl -L -o PicoBridge_v0.2.1.apk \
+     https://github.com/BotRunner64/pico-bridge/releases/download/v0.2.1/PicoBridge_v0.2.1_20260522_release.apk
    adb devices                         # must list the headset
-   adb install PicoBridge_v0.2.1.apk   # committed at the repo root
+   adb install PicoBridge_v0.2.1.apk
    ```
-   (Upstream source of the app:
-   [pico-bridge releases](https://github.com/BotRunner64/pico-bridge/releases), v0.2.1.)
+   The APK (60 MB) is not tracked in this repo because CI rejects files over
+   2 MiB. The exact file we run is also recoverable from git history:
+   `git show f29398a:PicoBridge_v0.2.1.apk > PicoBridge_v0.2.1.apk`
+   (md5 `1537e2959b9f53e2feeed7957023b945`).
 3. **Pair the trackers.** Headset Settings → Devices → Motion Tracker → pair
    both pucks. Strap them to the **ankles**, LED facing outward, not covered
    by trousers, in good light (the headset cameras must see them).
@@ -533,7 +537,6 @@ then rebase `main` onto `upstream/master` and re-test in sim.
 README.md                  this file (end-to-end operating manual)
 README.upstream.md         original Teleopit README (quick start, changelog)
 go.sh                      one-command laptop session launcher
-PicoBridge_v0.2.1.apk      headset app (adb install)
 lab/
   teleopit_estop.sh        software e-stop fallback (kills the command stream)
   orin/discovery_relay.py  headset auto-discovery relay, runs on the Orin
@@ -550,7 +553,10 @@ train_mimic/               upstream training code (not used here; no GPU on the 
 ```
 
 Not committed (downloaded or generated): `assets/robots/`, `ckpt/`,
-`teleopit/retargeting/gmr/assets/`, `data/`, `*.log`, `outputs/`.
+`teleopit/retargeting/gmr/assets/`, `data/`, `*.log`, `outputs/`, `*.apk`
+(the headset app, section 3.4). CI (`.github/workflows/repo-hygiene.yml`)
+fails on any tracked file over 2 MiB; run
+`python scripts/dev/check_large_tracked_files.py` before pushing.
 
 Branches on GitHub: `main` (this stack), `archive/holomotion-2026-08-18`
 (previous HoloMotion/SONIC workspace with all audits and runbooks).

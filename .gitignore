@@ -105,3 +105,6 @@ data/modelscope_upload/
 # Codex local workspace state
 .codex
 .omx/
+
+# Headset app: download from the pico-bridge release (see README 3.4); too large for this repo (CI limit 2 MiB)
+*.apk
